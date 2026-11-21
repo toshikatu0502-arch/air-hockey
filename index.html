@@ -122,8 +122,8 @@
       conn.on('data', (data) => {
         if (data.type === 'move' && players[conn.peer]) {
           const p = players[conn.peer];
-          const moveX = data.dx * 1.6;
-          const moveY = data.dy * 1.6;
+          const moveX = data.dx * 1.0;
+          const moveY = data.dy * 1.0;
           p.x = Math.max(p.radius, Math.min(canvas.width - p.radius, p.x + moveX));
           p.y = Math.max(p.radius, Math.min(canvas.height - p.radius, p.y + moveY));
           p.vx = moveX;
