@@ -82,17 +82,15 @@
     let targetPuckCount = 3;
     let autoCpuAdded = false;
 
-    // パック速度設定（basePuckSpeedを基準に上限・下限を連動）
     let basePuckSpeed = 7;
     let maxPuckSpeed = 12;
     let minPuckSpeed = 4.5;
     let malletSensitivity = 1.0;
 
-    // ゴール開口率
     let goalRatio = 0.36;
     let goalStart = (1 - goalRatio) / 2;
     let goalEnd = 1 - goalStart;
-    const ZONE_DEPTH_RATIO = 0.38;
+    const ZONE_DEPTH_RATIO = 0.42;
 
     const INITIAL_LIFE = 5;
     let gameState = 'waiting';
@@ -183,6 +181,7 @@
       return { v1, v2, mx, my, tx, ty, len, nx, ny, isGoalEdge, maxZoneDepth };
     }
 
+    // 4人までは四角形、5人以上は正N角形（五角形〜十五角形）に自動変形
     function buildArena(resetPositions = false) {
       canvas.width = window.innerWidth - 260;
       canvas.height = window.innerHeight;
@@ -198,8 +197,9 @@
       arena.edges = [];
 
       if (count <= 1) {
+        // 0〜1人：四角形（練習用）
         setGoalRatio(0.36);
-        arena.shapeName = '待機中（正方形コート）';
+        arena.shapeName = '待機中（四角形コート）';
         const half = minDim * 0.42;
         const v = [
           { x: arena.cx - half, y: arena.cy - half },
@@ -215,8 +215,9 @@
           makeEdge(v[3], v[0], false)
         ];
       } else if (count === 2) {
-        setGoalRatio(0.36);
-        arena.shapeName = '2人対戦：長方形コート';
+        // 2人：横長の四角形（左右2辺がゴール、上下2辺は壁）
+        setGoalRatio(0.38);
+        arena.shapeName = '2人対戦：四角形コート';
         const halfW = Math.min(canvas.width * 0.46, minDim * 0.65);
         const halfH = minDim * 0.38;
         const v = [
@@ -227,32 +228,15 @@
         ];
         arena.vertices = v;
         arena.edges = [
-          makeEdge(v[3], v[0], true),
-          makeEdge(v[1], v[2], true),
-          makeEdge(v[0], v[1], false),
-          makeEdge(v[2], v[3], false)
+          makeEdge(v[3], v[0], true),  // P1: 左辺
+          makeEdge(v[1], v[2], true),  // P2: 右辺
+          makeEdge(v[0], v[1], false), // 上壁
+          makeEdge(v[2], v[3], false)  // 下壁
         ];
       } else if (count === 3) {
-        setGoalRatio(0.28);
-        arena.shapeName = '3人対戦：正三角形コート';
-        const rByHeight = (canvas.height - 90) / 1.5;
-        const rByWidth = (canvas.width - 100) / Math.sqrt(3);
-        const r = Math.min(rByHeight, rByWidth);
-        arena.cy = canvas.height / 2 + r * 0.22;
-
-        for (let i = 0; i < 3; i++) {
-          const angle = -Math.PI / 2 + (i * Math.PI * 2) / 3;
-          arena.vertices.push({
-            x: arena.cx + r * Math.cos(angle),
-            y: arena.cy + r * Math.sin(angle)
-          });
-        }
-        for (let i = 0; i < 3; i++) {
-          arena.edges.push(makeEdge(arena.vertices[i], arena.vertices[(i + 1) % 3], true));
-        }
-      } else if (count === 4) {
-        setGoalRatio(0.30);
-        arena.shapeName = '4人対戦：長方形コート';
+        // 3人：四角形（4辺のうち3辺がゴール、上辺1つが壁）
+        setGoalRatio(0.34);
+        arena.shapeName = '3人対戦：四角形コート（3辺ゴール）';
         const halfW = Math.min(canvas.width * 0.45, minDim * 0.56);
         const halfH = minDim * 0.42;
         const v = [
@@ -263,13 +247,33 @@
         ];
         arena.vertices = v;
         arena.edges = [
-          makeEdge(v[2], v[3], true),
-          makeEdge(v[0], v[1], true),
-          makeEdge(v[3], v[0], true),
-          makeEdge(v[1], v[2], true)
+          makeEdge(v[3], v[0], true),  // P1: 左辺
+          makeEdge(v[1], v[2], true),  // P2: 右辺
+          makeEdge(v[2], v[3], true),  // P3: 下辺
+          makeEdge(v[0], v[1], false)  // 上辺（壁）
+        ];
+      } else if (count === 4) {
+        // 4人：四角形（上下左右の4辺すべてがゴール）
+        setGoalRatio(0.34);
+        arena.shapeName = '4人対戦：四角形コート（4辺ゴール）';
+        const halfW = Math.min(canvas.width * 0.45, minDim * 0.56);
+        const halfH = minDim * 0.42;
+        const v = [
+          { x: arena.cx - halfW, y: arena.cy - halfH },
+          { x: arena.cx + halfW, y: arena.cy - halfH },
+          { x: arena.cx + halfW, y: arena.cy + halfH },
+          { x: arena.cx - halfW, y: arena.cy + halfH }
+        ];
+        arena.vertices = v;
+        arena.edges = [
+          makeEdge(v[2], v[3], true), // P1: 下辺
+          makeEdge(v[0], v[1], true), // P2: 上辺
+          makeEdge(v[3], v[0], true), // P3: 左辺
+          makeEdge(v[1], v[2], true)  // P4: 右辺
         ];
       } else {
-        setGoalRatio(count <= 6 ? 0.36 : 0.44);
+        // 5〜15人：五角形から十五角形まで徐々に角を増やす
+        setGoalRatio(count <= 6 ? 0.38 : 0.45);
         arena.shapeName = `${count}人対戦：正${count}角形コート`;
         const n = count;
         const startAngle = Math.PI / 2 - Math.PI / n;
@@ -392,16 +396,14 @@
       });
     }
 
-    // パック速度・マレット倍率のリアルタイム更新（既存のパック速度も即座に反映）
     function updateSettings() {
       const puckInput = parseFloat(document.getElementById('puck-speed-input').value);
       if (!isNaN(puckInput) && puckInput >= 1) {
         const clampedVal = Math.max(1, Math.min(30, puckInput));
         basePuckSpeed = clampedVal;
-        minPuckSpeed = clampedVal * 0.75; // 最低速度（減速しないよう基準値の75%を維持）
-        maxPuckSpeed = clampedVal * 1.8;  // スマッシュ時の最高速度上限
+        minPuckSpeed = clampedVal * 0.75;
+        maxPuckSpeed = clampedVal * 1.8;
 
-        // すでに動いているパックのスピードも即座に新しい基準速度へ調整
         pucks.forEach(puck => {
           const cur = Math.hypot(puck.vx, puck.vy);
           if (cur > 0) {
@@ -589,7 +591,6 @@
         puck.x += puck.vx;
         puck.y += puck.vy;
 
-        // 摩擦減速はゼロにし、設定された最低〜最高速度の範囲内に収める
         const currentSpeed = Math.hypot(puck.vx, puck.vy);
         if (currentSpeed > maxPuckSpeed) {
           puck.vx = (puck.vx / currentSpeed) * maxPuckSpeed;
@@ -599,7 +600,6 @@
           puck.vy = (puck.vy / currentSpeed) * minPuckSpeed;
         }
 
-        // 壁との反射・ゴール判定（入射角に応じた自動減速調整付き）
         for (let eIdx = 0; eIdx < arena.edges.length; eIdx++) {
           const edge = arena.edges[eIdx];
           const distToEdge = (puck.x - edge.v1.x) * edge.nx + (puck.y - edge.v1.y) * edge.ny;
@@ -637,19 +637,13 @@
                 break;
               }
             } else {
-              // めり込み補正
               puck.x += edge.nx * (puck.radius - distToEdge);
               puck.y += edge.ny * (puck.radius - distToEdge);
 
               const dot = puck.vx * edge.nx + puck.vy * edge.ny;
               if (dot < 0) {
                 const spd = Math.hypot(puck.vx, puck.vy);
-                // 入射角の垂直度（0.0 = 平行にカスめた 〜 1.0 = 真っ正面から垂直衝突）
                 const normalImpact = spd > 0 ? Math.abs(dot) / spd : 0;
-
-                // 角度に応じた反発係数：
-                // 斜めに当たった時は 1.0（全く減速しない）
-                // 真っ正面から強くぶつかった時だけ最大15%（0.85）まで自然に衝撃吸収
                 const restitution = 1.0 - (normalImpact * normalImpact) * 0.15;
 
                 puck.vx = (puck.vx - 2 * dot * edge.nx) * restitution;
@@ -659,7 +653,6 @@
           }
         }
 
-        // マレットとの衝突判定
         alivePlayers.forEach(p => {
           const dx = puck.x - p.x;
           const dy = puck.y - p.y;
@@ -689,7 +682,6 @@
           }
         });
 
-        // パック同士の衝突判定
         for (let j = i + 1; j < pucks.length; j++) {
           const other = pucks[j];
           const dx = other.x - puck.x;
