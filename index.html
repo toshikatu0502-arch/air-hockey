@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>8人エアホッケー（ホスト盤面）</title>
+  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <style>
+    body { margin: 0; background: #111; color: #fff; font-family: sans-serif; overflow: hidden; display: flex; }
+    #sidebar { width: 260px; padding: 20px; background: #1e1e24; display: flex; flex-direction: column; align-items: center; z-index: 10; }
+    #qrcode { background: #fff; padding: 10px; border-radius: 8px; margin: 15px 0; }
+    canvas { flex: 1; background: #0a0a0f; display: block; }
+    .player-badge { width: 100%; padding: 8px; margin: 4px 0; border-radius: 4px; font-weight: bold; color: #000; }
+  </style>
+</head>
+<body>
+  <div id="sidebar">
+    <h3>スマホで参加</h3>
+    <div id="qrcode"></div>
+    <p id="status" style="font-size: 12px; color: #aaa;">ID発行中...</p>
+    <div id="player-list" style="width: 100%;"></div>
+  </div>
+  <canvas id="gameCanvas"></canvas>
+
+  <script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const colors = ['#FF3B30', '#007AFF', '#34C759', '#FFCC00', '#AF52DE', '#FF9500', '#5AC8FA', '#FF2D55'];
+    const players = {}; // 接続中のプレイヤー情報
+
+    function resize() {
+      canvas.width = window.innerWidth - 260;
+      canvas.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    // 1. PeerJSの初期化（ホスト）
+    const peer = new Peer();
+
+    peer.on('open', (id) => {
+      document.getElementById('status').innerText = 'ルームID: ' + id;
+      // 同じ階層にある controller.html へのURLを生成
+      const baseUrl = window.location.href.substring(0, window.location.href.lastIndexOf('/') + 1);
+      const joinUrl = `${baseUrl}controller.html?host=${id}`;
+      
+      new QRCode(document.getElementById('qrcode'), {
+        text: joinUrl,
+        width: 180,
+        height: 180
+      });
+    });
+
+    // 2. スマホからの接続を受け付ける
+    peer.on('connection', (conn) => {
+      const playerIndex = Object.keys(players).length;
+      if (playerIndex >= 8) {
+        conn.close(); // 8人まで
+        return;
+      }
+
+      const color = colors[playerIndex];
+      players[conn.peer] = {
+        id: conn.peer,
+        num: playerIndex + 1,
+        color: color,
+        x: canvas.width / 2,
+        y: canvas.height / 2,
+        radius: 28
+      };
+      updatePlayerList();
+
+      // 接続完了後、スマホ側に割り当てた色を伝える
+      conn.on('open', () => {
+        conn.send({ type: 'init', color: color, num: playerIndex + 1 });
+      });
+
+      // スマホから送られてきた移動量(dx, dy)を反映
+      conn.on('data', (data) => {
+        if (data.type === 'move' && players[conn.peer]) {
+          const p = players[conn.peer];
+          p.x = Math.max(p.radius, Math.min(canvas.width - p.radius, p.x + data.dx * 1.5));
+          p.y = Math.max(p.radius, Math.min(canvas.height - p.radius, p.y + data.dy * 1.5));
+        }
+      });
+
+      conn.on('close', () => {
+        delete players[conn.peer];
+        updatePlayerList();
+      });
+    });
+
+    function updatePlayerList() {
+      const list = document.getElementById('player-list');
+      list.innerHTML = '';
+      Object.values(players).forEach(p => {
+        const div = document.createElement('div');
+        div.className = 'player-badge';
+        div.style.background = p.color;
+        div.innerText = `Player ${p.num}`;
+        list.appendChild(div);
+      });
+    }
+
+    // 3. 描画ループ（60fps）
+    function loop() {
+      ctx.fillStyle = 'rgba(10, 10, 15, 0.3)'; // 少し残像を残す
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      // プレイヤー（マレット）の描画
+      Object.values(players).forEach(p => {
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+        ctx.fillStyle = p.color;
+        ctx.shadowBlur = 15;
+        ctx.shadowColor = p.color;
+        ctx.fill();
+        ctx.shadowBlur = 0;
+
+        ctx.fillStyle = '#fff';
+        ctx.font = 'bold 16px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(p.num, p.x, p.y);
+      });
+
+      requestAnimationFrame(loop);
+    }
+    loop();
+  </script>
+</body>
+</html>

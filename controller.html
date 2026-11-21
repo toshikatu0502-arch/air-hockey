@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>エアホッケー コントローラー</title>
+  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+  <style>
+    body {
+      margin: 0; background: #1a1a2e; color: #fff; font-family: sans-serif;
+      height: 100vh; display: flex; flex-direction: column; justify-content: center; align-items: center;
+      touch-action: none; user-select: none; overflow: hidden;
+    }
+    #info { position: absolute; top: 20px; font-size: 20px; font-weight: bold; pointer-events: none; }
+    #guide { color: rgba(255,255,255,0.4); pointer-events: none; text-align: center; }
+  </style>
+</head>
+<body>
+  <div id="info">接続中...</div>
+  <div id="guide">画面を指でなぞって操作</div>
+
+  <script>
+    const urlParams = new URLSearchParams(window.location.search);
+    const hostId = urlParams.get('host');
+    const infoEl = document.getElementById('info');
+
+    if (!hostId) {
+      infoEl.innerText = 'エラー: QRコードから開いてください';
+    } else {
+      const peer = new Peer();
+
+      peer.on('open', () => {
+        const conn = peer.connect(hostId);
+
+        conn.on('open', () => {
+          infoEl.innerText = '接続完了！';
+        });
+
+        // ホストから色と番号を受け取る
+        conn.on('data', (data) => {
+          if (data.type === 'init') {
+            document.body.style.background = data.color;
+            infoEl.innerText = `あなたは Player ${data.num}`;
+          }
+        });
+
+        // タッチ操作の送信
+        let lastX = null;
+        let lastY = null;
+
+        window.addEventListener('touchstart', (e) => {
+          const touch = e.touches[0];
+          lastX = touch.clientX;
+          lastY = touch.clientY;
+        });
+
+        window.addEventListener('touchmove', (e) => {
+          e.preventDefault();
+          if (lastX === null || !conn.open) return;
+          const touch = e.touches[0];
+          const dx = touch.clientX - lastX;
+          const dy = touch.clientY - lastY;
+          lastX = touch.clientX;
+          lastY = touch.clientY;
+
+          conn.send({ type: 'move', dx: dx, dy: dy });
+        }, { passive: false });
+
+        window.addEventListener('touchend', () => {
+          lastX = null;
+          lastY = null;
+        });
+      });
+    }
+  </script>
+</body>
+</html>
