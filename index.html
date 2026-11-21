@@ -87,6 +87,10 @@
     let minPuckSpeed = 4.5;
     let malletSensitivity = 1.0;
 
+    // Aボタン・ダッシュ設定
+    const DASH_DURATION_MS = 260;  // 一瞬速くなる時間（約0.26秒）
+    const DASH_SPEED_MULT = 2.4;   // ダッシュ中の移動速度倍率
+
     let goalRatio = 0.36;
     let goalStart = (1 - goalRatio) / 2;
     let goalEnd = 1 - goalStart;
@@ -132,7 +136,8 @@
         y: arena.cy,
         vx: 0,
         vy: 0,
-        radius: 26
+        radius: 26,
+        dashUntil: 0
       };
       return true;
     }
@@ -181,7 +186,6 @@
       return { v1, v2, mx, my, tx, ty, len, nx, ny, isGoalEdge, maxZoneDepth };
     }
 
-    // 画面の横幅・高さめいっぱいまで自動フィットさせてコートを構築
     function buildArena(resetPositions = false) {
       const sidebarWidth = document.getElementById('sidebar').offsetWidth || 250;
       canvas.width = window.innerWidth - sidebarWidth;
@@ -189,7 +193,6 @@
       arena.cx = canvas.width / 2;
       arena.cy = canvas.height / 2;
 
-      // ラベル表示用の最小マージンだけ残して画面いっぱいに広げる
       const marginX = 54;
       const marginY = 44;
       arena.rx = Math.max(120, canvas.width / 2 - marginX);
@@ -202,7 +205,6 @@
       arena.edges = [];
 
       if (count <= 1) {
-        // 0〜1人：横長ワイド四角形（練習用）
         setGoalRatio(0.36);
         arena.shapeName = '待機中（ワイド四角形コート）';
         const halfW = arena.rx;
@@ -221,7 +223,6 @@
           makeEdge(v[3], v[0], false)
         ];
       } else if (count === 2) {
-        // 2人：画面めいっぱいの横長四角形（左右2辺がゴール、上下2辺は壁）
         setGoalRatio(0.38);
         arena.shapeName = '2人対戦：ワイド四角形コート';
         const halfW = arena.rx;
@@ -234,13 +235,12 @@
         ];
         arena.vertices = v;
         arena.edges = [
-          makeEdge(v[3], v[0], true),  // P1: 左辺
-          makeEdge(v[1], v[2], true),  // P2: 右辺
-          makeEdge(v[0], v[1], false), // 上壁
-          makeEdge(v[2], v[3], false)  // 下壁
+          makeEdge(v[3], v[0], true),
+          makeEdge(v[1], v[2], true),
+          makeEdge(v[0], v[1], false),
+          makeEdge(v[2], v[3], false)
         ];
       } else if (count === 3) {
-        // 3人：画面めいっぱいの四角形（左右・下の3辺がゴール、上辺が壁）
         setGoalRatio(0.34);
         arena.shapeName = '3人対戦：ワイド四角形コート（3辺ゴール）';
         const halfW = arena.rx;
@@ -253,13 +253,12 @@
         ];
         arena.vertices = v;
         arena.edges = [
-          makeEdge(v[3], v[0], true),  // P1: 左辺
-          makeEdge(v[1], v[2], true),  // P2: 右辺
-          makeEdge(v[2], v[3], true),  // P3: 下辺
-          makeEdge(v[0], v[1], false)  // 上辺（壁）
+          makeEdge(v[3], v[0], true),
+          makeEdge(v[1], v[2], true),
+          makeEdge(v[2], v[3], true),
+          makeEdge(v[0], v[1], false)
         ];
       } else if (count === 4) {
-        // 4人：画面めいっぱいの四角形（上下左右の4辺すべてがゴール）
         setGoalRatio(0.34);
         arena.shapeName = '4人対戦：ワイド四角形コート（4辺ゴール）';
         const halfW = arena.rx;
@@ -272,13 +271,12 @@
         ];
         arena.vertices = v;
         arena.edges = [
-          makeEdge(v[2], v[3], true), // P1: 下辺
-          makeEdge(v[0], v[1], true), // P2: 上辺
-          makeEdge(v[3], v[0], true), // P3: 左辺
-          makeEdge(v[1], v[2], true)  // P4: 右辺
+          makeEdge(v[2], v[3], true),
+          makeEdge(v[0], v[1], true),
+          makeEdge(v[3], v[0], true),
+          makeEdge(v[1], v[2], true)
         ];
       } else {
-        // 5〜15人：画面の縦横比率に合わせて横長にフィットしたN角形（五角形〜十五角形）
         setGoalRatio(count <= 6 ? 0.38 : 0.45);
         arena.shapeName = `${count}人対戦：ワイド${count}角形コート`;
         const n = count;
@@ -473,6 +471,7 @@
       playerList.forEach(p => {
         p.life = INITIAL_LIFE;
         p.alive = true;
+        p.dashUntil = 0;
       });
       buildArena(true);
       pucks.forEach(resetPuck);
@@ -512,7 +511,8 @@
         y: arena.cy,
         vx: 0,
         vy: 0,
-        radius: 25
+        radius: 25,
+        dashUntil: 0
       };
 
       const humans = Object.values(players).filter(p => !p.isCpu);
@@ -534,12 +534,17 @@
       });
 
       conn.on('data', (data) => {
-        if (data.type === 'move' && players[conn.peer]) {
-          const p = players[conn.peer];
-          if (!p.alive) return;
+        const p = players[conn.peer];
+        if (!p || !p.alive) return;
 
-          const moveX = data.dx * malletSensitivity;
-          const moveY = data.dy * malletSensitivity;
+        if (data.type === 'dash') {
+          // Aボタン押下：一瞬だけ移動速度ブースト状態にする
+          p.dashUntil = Date.now() + DASH_DURATION_MS;
+        } else if (data.type === 'move') {
+          const isDashing = Date.now() < p.dashUntil;
+          const speedMult = malletSensitivity * (isDashing ? DASH_SPEED_MULT : 1.0);
+          const moveX = data.dx * speedMult;
+          const moveY = data.dy * speedMult;
           const clamped = clampMalletToZone(p, p.x + moveX, p.y + moveY);
 
           p.vx = clamped.x - p.x;
@@ -677,10 +682,10 @@
 
             const hitSpeed = Math.hypot(p.vx, p.vy);
             const minBounce = Math.max(1.2, basePuckSpeed * 0.85);
-            const pushSpeed = Math.max(minBounce, hitSpeed * 0.5);
+            const pushSpeed = Math.max(minBounce, hitSpeed * 0.55);
 
-            puck.vx = refVx * 0.9 + nx * pushSpeed + p.vx * 0.25;
-            puck.vy = refVy * 0.9 + ny * pushSpeed + p.vy * 0.25;
+            puck.vx = refVx * 0.9 + nx * pushSpeed + p.vx * 0.28;
+            puck.vy = refVy * 0.9 + ny * pushSpeed + p.vy * 0.28;
 
             if (p.conn && p.conn.open) {
               p.conn.send({ type: 'hit' });
@@ -853,12 +858,24 @@
         ctx.fill();
       });
 
+      const now = Date.now();
       Object.values(players).filter(p => p.alive).forEach(p => {
+        const isDashing = now < p.dashUntil;
+
+        // ダッシュ中は外周に白いオーラリングを描画
+        if (isDashing) {
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, p.radius + 7, 0, Math.PI * 2);
+          ctx.strokeStyle = '#ffffff';
+          ctx.lineWidth = 3;
+          ctx.stroke();
+        }
+
         ctx.beginPath();
         ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
         ctx.fillStyle = p.color;
-        ctx.shadowBlur = 12;
-        ctx.shadowColor = p.color;
+        ctx.shadowBlur = isDashing ? 24 : 12;
+        ctx.shadowColor = isDashing ? '#ffffff' : p.color;
         ctx.fill();
         ctx.shadowBlur = 0;
 
