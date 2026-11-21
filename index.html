@@ -52,10 +52,10 @@
     window.addEventListener('resize', resize);
     resize();
 
-    // パック生成関数
+    // パック生成関数（初速をゆっくりに変更）
     function createPuck() {
       const angle = Math.random() * Math.PI * 2;
-      const speed = 5 + Math.random() * 3;
+      const speed = 2.5 + Math.random() * 1.5;
       return {
         x: canvas.width / 2 + (Math.random() - 0.5) * 100,
         y: canvas.height / 2 + (Math.random() - 0.5) * 100,
@@ -158,16 +158,16 @@
         puck.x += puck.vx;
         puck.y += puck.vy;
 
-        // 摩擦（緩やかに減速）と最高・最低速度の制限
-        puck.vx *= 0.996;
-        puck.vy *= 0.996;
+        // 摩擦（緩やかに減速）と最高・最低速度の制限（全体的にスローに調整）
+        puck.vx *= 0.994;
+        puck.vy *= 0.994;
         const currentSpeed = Math.hypot(puck.vx, puck.vy);
-        if (currentSpeed > 22) {
-          puck.vx = (puck.vx / currentSpeed) * 22;
-          puck.vy = (puck.vy / currentSpeed) * 22;
-        } else if (currentSpeed < 3.5 && currentSpeed > 0) {
-          puck.vx = (puck.vx / currentSpeed) * 3.5;
-          puck.vy = (puck.vy / currentSpeed) * 3.5;
+        if (currentSpeed > 11) {
+          puck.vx = (puck.vx / currentSpeed) * 11;
+          puck.vy = (puck.vy / currentSpeed) * 11;
+        } else if (currentSpeed < 1.8 && currentSpeed > 0) {
+          puck.vx = (puck.vx / currentSpeed) * 1.8;
+          puck.vy = (puck.vy / currentSpeed) * 1.8;
         }
 
         // 壁との反射
@@ -199,9 +199,9 @@
             const hitSpeed = Math.hypot(p.vx, p.vy);
 
             if (hitSpeed > 1.5) {
-              // マレットが動いている場合：打ち返しパワーを加算
-              puck.vx = refVx * 0.85 + nx * (hitSpeed * 0.6) + p.vx * 0.5;
-              puck.vy = refVy * 0.85 + ny * (hitSpeed * 0.6) + p.vy * 0.5;
+              // マレットが動いている場合：打ち返しパワーを加算（加速量をマイルドに調整）
+              puck.vx = refVx * 0.85 + nx * (hitSpeed * 0.35) + p.vx * 0.25;
+              puck.vy = refVy * 0.85 + ny * (hitSpeed * 0.35) + p.vy * 0.25;
             } else {
               // マレットが止まっている場合：元のスピードのまま自然に跳ね返す
               puck.vx = refVx * 0.95;
@@ -243,7 +243,7 @@
         }
       }
 
-      // マレットの瞬間速度を素早く減衰（指を止めた瞬間にしっかり止まるようにする）
+      // マレットの瞬間速度を素早く減衰
       playerList.forEach(p => {
         p.vx *= 0.2;
         p.vy *= 0.2;
