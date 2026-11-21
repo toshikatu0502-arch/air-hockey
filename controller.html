@@ -3,38 +3,76 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>エアホッケー コントローラー</title>
+  <title>エアホッケー コントローラー（横持ちレトロ風）</title>
   <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
   <style>
     html, body {
       margin: 0; padding: 0; width: 100%; height: 100%;
-      background: #12121a; color: #fff; font-family: sans-serif;
-      display: flex; flex-direction: column; justify-content: center; align-items: center;
+      background: #1a1817; color: #fff; font-family: 'Courier New', sans-serif;
       touch-action: none; overscroll-behavior: none; user-select: none; -webkit-user-select: none;
       overflow: hidden; position: fixed; inset: 0;
     }
-    #header {
-      position: absolute; top: 20px; width: 100%; text-align: center;
-      pointer-events: none; z-index: 10;
+
+    /* ファミコン風の本体プレートフレーム */
+    #gamepad-frame {
+      width: 100%; height: 100%;
+      box-sizing: border-box;
+      border: 8px solid #d8d0c5;
+      background: linear-gradient(180deg, #2b2625 0%, #1c1918 100%);
+      display: flex; flex-direction: column;
+      position: relative;
     }
-    #info { font-size: 22px; font-weight: bold; margin-bottom: 4px; }
-    #guide { font-size: 13px; color: rgba(255,255,255,0.6); }
-    canvas { display: block; width: 100%; height: 100%; }
+
+    /* 上部の装飾ライン＆プレイヤー表示バー */
+    #top-bar {
+      height: 38px;
+      background: #8b1e24;
+      border-bottom: 3px solid #d4af37;
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 0 16px;
+      z-index: 10;
+    }
+    #info {
+      font-size: 16px; font-weight: bold; letter-spacing: 1px;
+      text-shadow: 1px 1px 0 #000;
+    }
     #fs-btn {
-      position: absolute; bottom: 24px; padding: 10px 20px;
-      background: rgba(255, 255, 255, 0.1); color: #fff; border: 1px solid rgba(255,255,255,0.4);
-      border-radius: 25px; font-size: 14px; font-weight: bold; cursor: pointer; z-index: 20;
+      padding: 4px 12px;
+      background: #1c1918; color: #d8d0c5; border: 1px solid #d4af37;
+      border-radius: 4px; font-size: 12px; font-weight: bold; cursor: pointer;
     }
-    #fs-btn:active { background: rgba(255, 255, 255, 0.25); }
+    #fs-btn:active { background: #3a3432; }
+
+    canvas {
+      flex: 1; width: 100%; height: 100%; display: block;
+    }
+
+    /* 縦持ち時の案内オーバーレイ */
+    #rotate-notice {
+      display: none;
+      position: fixed; inset: 0; background: rgba(15, 15, 20, 0.95);
+      z-index: 100; flex-direction: column; justify-content: center; align-items: center;
+      text-align: center; padding: 20px;
+    }
+    @media screen and (orientation: portrait) {
+      #rotate-notice { display: flex; }
+    }
   </style>
 </head>
 <body>
-  <div id="header">
-    <div id="info">接続中...</div>
-    <div id="guide">中央の円の中で指を動かして操作</div>
+  <div id="rotate-notice">
+    <div style="font-size: 40px; margin-bottom: 12px;">📱↻</div>
+    <div style="font-size: 18px; font-weight: bold;">スマホを横向きにしてください</div>
+    <div style="font-size: 13px; color: #aaa; margin-top: 6px;">左手で移動・右手でボタン操作になります</div>
   </div>
-  <canvas id="padCanvas"></canvas>
-  <button id="fs-btn" onclick="enterFullscreen()">全画面表示</button>
+
+  <div id="gamepad-frame">
+    <div id="top-bar">
+      <div id="info">CONNECTING...</div>
+      <button id="fs-btn" onclick="enterFullscreen()">FULL SCREEN</button>
+    </div>
+    <canvas id="padCanvas"></canvas>
+  </div>
 
   <script>
     const urlParams = new URLSearchParams(window.location.search);
@@ -44,32 +82,59 @@
     const canvas = document.getElementById('padCanvas');
     const ctx = canvas.getContext('2d');
 
-    let playerColor = '#00ffcc'; // 接続後にホストから割り当てられる色
-    let padCenterX = 0;
-    let padCenterY = 0;
-    let padRadius = 130;
+    let playerColor = '#00ffcc';
+    let hitFlash = 0;
+    let conn = null;
 
-    // 操作中の指（カーソル）の状態
-    let isTouching = false;
-    let activeTouchId = null;
+    // 左側：丸い操作パッドの状態
+    let pad = { cx: 0, cy: 0, r: 90 };
+    let isPadTouching = false;
+    let padTouchId = null;
     let cursorX = 0;
     let cursorY = 0;
     let lastX = null;
     let lastY = null;
-    let hitFlash = 0; // パックに当たった時の発光エフェクト用
-    const trail = []; // 指の軌跡
+    const trail = [];
+
+    // 右側：ファミコン風 B / A ボタンの状態
+    let buttons = [
+      { id: 'B', label: 'B', x: 0, y: 0, r: 38, pressed: false, touchId: null },
+      { id: 'A', label: 'A', x: 0, y: 0, r: 38, pressed: false, touchId: null }
+    ];
 
     function resize() {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-      padCenterX = canvas.width / 2;
-      padCenterY = canvas.height / 2 + 10;
-      // 画面の短い方の辺に合わせて、端から十分な余白を残した円のサイズを計算
-      padRadius = Math.min(canvas.width, canvas.height) * 0.36;
-      if (!isTouching) {
-        cursorX = padCenterX;
-        cursorY = padCenterY;
+      const rect = canvas.getBoundingClientRect();
+      canvas.width = rect.width;
+      canvas.height = rect.height;
+
+      const w = canvas.width;
+      const h = canvas.height;
+
+      // 左側：丸い操作パッド配置（画面左半分の中央）
+      pad.cx = w * 0.26;
+      pad.cy = h * 0.52;
+      pad.r = Math.min(w * 0.21, h * 0.40);
+
+      if (!isPadTouching) {
+        cursorX = pad.cx;
+        cursorY = pad.cy;
       }
+
+      // 右側：B・Aボタン配置（ファミコン風に少し斜め配置）
+      const btnRadius = Math.min(w * 0.085, h * 0.19);
+      const rightCenterX = w * 0.75;
+      const rightCenterY = h * 0.54;
+      const spacing = btnRadius * 2.5;
+
+      // Bボタン（左下寄り）
+      buttons[0].x = rightCenterX - spacing * 0.52;
+      buttons[0].y = rightCenterY + btnRadius * 0.25;
+      buttons[0].r = btnRadius;
+
+      // Aボタン（右上寄り）
+      buttons[1].x = rightCenterX + spacing * 0.52;
+      buttons[1].y = rightCenterY - btnRadius * 0.25;
+      buttons[1].r = btnRadius;
     }
     window.addEventListener('resize', resize);
     resize();
@@ -81,6 +146,10 @@
       } else if (elem.webkitRequestFullscreen) {
         elem.webkitRequestFullscreen();
       }
+      // 横画面ロック対応ブラウザなら横向き固定を試みる
+      if (screen.orientation && screen.orientation.lock) {
+        screen.orientation.lock('landscape').catch(() => {});
+      }
       fsBtn.style.display = 'none';
     }
 
@@ -88,102 +157,151 @@
       if (!document.fullscreenElement) {
         fsBtn.style.display = 'block';
       }
+      setTimeout(resize, 100);
     });
 
-    // 座標を操作円の内側に制限する関数
     function clampToPad(x, y) {
-      const dx = x - padCenterX;
-      const dy = y - padCenterY;
+      const dx = x - pad.cx;
+      const dy = y - pad.cy;
       const dist = Math.hypot(dx, dy);
-      if (dist <= padRadius) {
-        return { x, y };
-      }
+      if (dist <= pad.r) return { x, y };
       const angle = Math.atan2(dy, dx);
       return {
-        x: padCenterX + Math.cos(angle) * padRadius,
-        y: padCenterY + Math.sin(angle) * padRadius
+        x: pad.cx + Math.cos(angle) * pad.r,
+        y: pad.cy + Math.sin(angle) * pad.r
       };
     }
 
-    // コントローラーの視覚描画ループ
+    // レトロゲーム機風UIの描画ループ
     function draw() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-      // 1. 操作エリアの外枠（ベース円）
+      // 中央の装飾ストライプ（レトロコントローラー風）
+      const midX = canvas.width * 0.5;
+      ctx.fillStyle = 'rgba(216, 208, 197, 0.06)';
+      ctx.fillRect(midX - 30, 12, 60, canvas.height - 24);
+      ctx.strokeStyle = 'rgba(212, 175, 55, 0.25)';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(midX - 30, 12, 60, canvas.height - 24);
+
+      // --- 左側：丸い操作パッド ---
+      // 台座の四角いレトロ枠
+      const boxSize = pad.r * 2.15;
+      ctx.fillStyle = '#141211';
+      ctx.strokeStyle = '#4a4440';
+      ctx.lineWidth = 3;
       ctx.beginPath();
-      ctx.arc(padCenterX, padCenterY, padRadius, 0, Math.PI * 2);
-      ctx.fillStyle = isTouching ? 'rgba(255, 255, 255, 0.07)' : 'rgba(255, 255, 255, 0.03)';
+      ctx.roundRect(pad.cx - boxSize / 2, pad.cy - boxSize / 2, boxSize, boxSize, 16);
+      ctx.fill();
+      ctx.stroke();
+
+      // 操作円の外枠
+      ctx.beginPath();
+      ctx.arc(pad.cx, pad.cy, pad.r, 0, Math.PI * 2);
+      ctx.fillStyle = isPadTouching ? 'rgba(255, 255, 255, 0.08)' : 'rgba(255, 255, 255, 0.03)';
       ctx.fill();
 
-      // 外枠のネオンリング（ヒット時は強く光る）
-      ctx.lineWidth = hitFlash > 0 ? 6 : 3;
+      ctx.lineWidth = hitFlash > 0 ? 5 : 3;
       ctx.strokeStyle = playerColor;
-      ctx.shadowBlur = hitFlash > 0 ? 25 : 10;
+      ctx.shadowBlur = hitFlash > 0 ? 20 : 8;
       ctx.shadowColor = playerColor;
       ctx.stroke();
       ctx.shadowBlur = 0;
 
-      // 2. 内側のガイドグリッド（同心円と十字線）
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
-      ctx.lineWidth = 1;
+      // 十字ガイドライン
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
+      ctx.lineWidth = 2;
       ctx.beginPath();
-      ctx.arc(padCenterX, padCenterY, padRadius * 0.5, 0, Math.PI * 2);
-      ctx.moveTo(padCenterX - padRadius * 0.85, padCenterY);
-      ctx.lineTo(padCenterX + padRadius * 0.85, padCenterY);
-      ctx.moveTo(padCenterX, padCenterY - padRadius * 0.85);
-      ctx.lineTo(padCenterX, padCenterY + padRadius * 0.85);
+      ctx.moveTo(pad.cx - pad.r * 0.8, pad.cy);
+      ctx.lineTo(pad.cx + pad.r * 0.8, pad.cy);
+      ctx.moveTo(pad.cx, pad.cy - pad.r * 0.8);
+      ctx.lineTo(pad.cx, pad.cy + pad.r * 0.8);
       ctx.stroke();
 
-      // 3. 指の軌跡（トレイル）描画
+      // 軌跡トレイル
       if (trail.length > 1) {
         for (let i = 1; i < trail.length; i++) {
-          const alpha = (i / trail.length) * 0.45;
           ctx.beginPath();
           ctx.moveTo(trail[i - 1].x, trail[i - 1].y);
           ctx.lineTo(trail[i].x, trail[i].y);
           ctx.strokeStyle = playerColor;
-          ctx.globalAlpha = alpha;
-          ctx.lineWidth = (i / trail.length) * 14;
+          ctx.globalAlpha = (i / trail.length) * 0.5;
+          ctx.lineWidth = (i / trail.length) * 12;
           ctx.lineCap = 'round';
           ctx.stroke();
         }
         ctx.globalAlpha = 1.0;
       }
 
-      // 4. 操作カーソル（タッチ中のみ表示、非タッチ時は中央に待機マーク）
-      if (isTouching) {
-        // 外側の波紋リング
+      // 操作カーソル（ノブ）
+      if (isPadTouching) {
         ctx.beginPath();
-        ctx.arc(cursorX, cursorY, 34, 0, Math.PI * 2);
+        ctx.arc(cursorX, cursorY, 26, 0, Math.PI * 2);
         ctx.fillStyle = playerColor;
         ctx.globalAlpha = 0.25;
         ctx.fill();
         ctx.globalAlpha = 1.0;
 
-        // メインの操作ノブ
         ctx.beginPath();
-        ctx.arc(cursorX, cursorY, 20, 0, Math.PI * 2);
+        ctx.arc(cursorX, cursorY, 16, 0, Math.PI * 2);
         ctx.fillStyle = playerColor;
-        ctx.shadowBlur = 15;
-        ctx.shadowColor = playerColor;
         ctx.fill();
-        ctx.shadowBlur = 0;
 
         ctx.beginPath();
-        ctx.arc(cursorX, cursorY, 8, 0, Math.PI * 2);
+        ctx.arc(cursorX, cursorY, 6, 0, Math.PI * 2);
         ctx.fillStyle = '#fff';
         ctx.fill();
       } else {
-        // 待機時の案内テキスト
         ctx.fillStyle = 'rgba(255, 255, 255, 0.35)';
-        ctx.font = 'bold 15px sans-serif';
+        ctx.font = 'bold 12px sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText('TOUCH HERE', padCenterX, padCenterY);
+        ctx.fillText('MOVE', pad.cx, pad.cy);
       }
 
+      // --- 右側：ファミコン風 B / A ボタン ---
+      buttons.forEach(btn => {
+        // クリーム色の四角い外枠プレート（ファミコンのボタン台座風）
+        const plateSize = btn.r * 2.25;
+        ctx.fillStyle = '#d8d0c5';
+        ctx.beginPath();
+        ctx.roundRect(btn.x - plateSize / 2, btn.y - plateSize / 2, plateSize, plateSize, 12);
+        ctx.fill();
+
+        // ボタンの影（押していない時は立体的に浮き上がる）
+        const offsetY = btn.pressed ? 2 : -3;
+        if (!btn.pressed) {
+          ctx.beginPath();
+          ctx.arc(btn.x, btn.y + 4, btn.r, 0, Math.PI * 2);
+          ctx.fillStyle = '#4a0d10';
+          ctx.fill();
+        }
+
+        // 赤い丸ボタン本体
+        ctx.beginPath();
+        ctx.arc(btn.x, btn.y + offsetY, btn.r, 0, Math.PI * 2);
+        ctx.fillStyle = btn.pressed ? '#ff3b30' : '#a81c24';
+        ctx.fill();
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = '#630e13';
+        ctx.stroke();
+
+        // ボタン内の光沢ハイライト
+        ctx.beginPath();
+        ctx.arc(btn.x - btn.r * 0.25, btn.y + offsetY - btn.r * 0.25, btn.r * 0.22, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.25)';
+        ctx.fill();
+
+        // プレート右下の「B」「A」刻印文字
+        ctx.fillStyle = '#8b1e24';
+        ctx.font = 'bold 14px sans-serif';
+        ctx.textAlign = 'right';
+        ctx.textBaseline = 'bottom';
+        ctx.fillText(btn.label, btn.x + plateSize / 2 - 6, btn.y + plateSize / 2 - 4);
+      });
+
       if (hitFlash > 0) hitFlash--;
-      if (!isTouching && trail.length > 0) trail.shift();
+      if (!isPadTouching && trail.length > 0) trail.shift();
 
       requestAnimationFrame(draw);
     }
@@ -191,97 +309,115 @@
 
     // PeerJS 通信処理
     if (!hostId) {
-      infoEl.innerText = 'エラー: QRコードから開いてください';
+      infoEl.innerText = 'QR ERROR';
     } else {
       const peer = new Peer();
 
       peer.on('open', () => {
-        const conn = peer.connect(hostId);
+        conn = peer.connect(hostId);
 
         conn.on('open', () => {
-          infoEl.innerText = '接続完了！';
+          infoEl.innerText = 'READY!';
         });
 
         conn.on('data', (data) => {
           if (data.type === 'init') {
             playerColor = data.color;
             infoEl.style.color = data.color;
-            infoEl.innerText = `Player ${data.num}`;
+            infoEl.innerText = `PLAYER ${data.num}`;
           } else if (data.type === 'hit') {
-            hitFlash = 8; // 画面の円も一瞬強く光らせる
+            hitFlash = 8;
             if (navigator.vibrate) navigator.vibrate(30);
+          } else if (data.type === 'goal') {
+            if (navigator.vibrate) navigator.vibrate([100, 50, 150]);
           }
         });
-
-        // タッチ開始：円の内側を触った時だけ操作スタート
-        canvas.addEventListener('touchstart', (e) => {
-          e.preventDefault();
-          if (isTouching) return;
-
-          for (let i = 0; i < e.changedTouches.length; i++) {
-            const touch = e.changedTouches[i];
-            const distFromCenter = Math.hypot(touch.clientX - padCenterX, touch.clientY - padCenterY);
-            
-            // 操作円の半径以内（少しだけ遊びを持たせて +10px）なら操作を受け付ける
-            if (distFromCenter <= padRadius + 10) {
-              isTouching = true;
-              activeTouchId = touch.identifier;
-              const clamped = clampToPad(touch.clientX, touch.clientY);
-              cursorX = clamped.x;
-              cursorY = clamped.y;
-              lastX = clamped.x;
-              lastY = clamped.y;
-              trail.length = 0;
-              trail.push({ x: cursorX, y: cursorY });
-              break;
-            }
-          }
-        }, { passive: false });
-
-        // タッチ移動：円の内側に制限しながら差分を送信
-        canvas.addEventListener('touchmove', (e) => {
-          e.preventDefault();
-          if (!isTouching || !conn.open) return;
-
-          for (let i = 0; i < e.changedTouches.length; i++) {
-            const touch = e.changedTouches[i];
-            if (touch.identifier === activeTouchId) {
-              const clamped = clampToPad(touch.clientX, touch.clientY);
-              const dx = clamped.x - lastX;
-              const dy = clamped.y - lastY;
-
-              cursorX = clamped.x;
-              cursorY = clamped.y;
-              lastX = clamped.x;
-              lastY = clamped.y;
-
-              trail.push({ x: cursorX, y: cursorY });
-              if (trail.length > 12) trail.shift();
-
-              if (dx !== 0 || dy !== 0) {
-                conn.send({ type: 'move', dx: dx, dy: dy });
-              }
-              break;
-            }
-          }
-        }, { passive: false });
-
-        // タッチ終了
-        const endTouch = (e) => {
-          for (let i = 0; i < e.changedTouches.length; i++) {
-            if (e.changedTouches[i].identifier === activeTouchId) {
-              isTouching = false;
-              activeTouchId = null;
-              lastX = null;
-              lastY = null;
-              break;
-            }
-          }
-        };
-        canvas.addEventListener('touchend', endTouch);
-        canvas.addEventListener('touchcancel', endTouch);
       });
     }
+
+    // マルチタッチ対応（左手パッド＋右手A/Bボタンを同時操作可能）
+    canvas.addEventListener('touchstart', (e) => {
+      e.preventDefault();
+      for (let i = 0; i < e.changedTouches.length; i++) {
+        const touch = e.changedTouches[i];
+
+        // 1. 右側 B/A ボタンの判定
+        let hitButton = false;
+        for (const btn of buttons) {
+          if (btn.touchId === null && Math.hypot(touch.clientX - btn.x, touch.clientY - btn.y) <= btn.r + 12) {
+            btn.pressed = true;
+            btn.touchId = touch.identifier;
+            hitButton = true;
+            if (navigator.vibrate) navigator.vibrate(15);
+            if (conn && conn.open) {
+              conn.send({ type: 'btn', button: btn.id, state: 'down' });
+            }
+            break;
+          }
+        }
+        if (hitButton) continue;
+
+        // 2. 左側 丸い操作パッドの判定
+        if (!isPadTouching && Math.hypot(touch.clientX - pad.cx, touch.clientY - pad.cy) <= pad.r + 15) {
+          isPadTouching = true;
+          padTouchId = touch.identifier;
+          const clamped = clampToPad(touch.clientX, touch.clientY);
+          cursorX = clamped.x;
+          cursorY = clamped.y;
+          lastX = clamped.x;
+          lastY = clamped.y;
+          trail.length = 0;
+          trail.push({ x: cursorX, y: cursorY });
+        }
+      }
+    }, { passive: false });
+
+    canvas.addEventListener('touchmove', (e) => {
+      e.preventDefault();
+      for (let i = 0; i < e.changedTouches.length; i++) {
+        const touch = e.changedTouches[i];
+        if (isPadTouching && touch.identifier === padTouchId) {
+          const clamped = clampToPad(touch.clientX, touch.clientY);
+          const dx = clamped.x - lastX;
+          const dy = clamped.y - lastY;
+
+          cursorX = clamped.x;
+          cursorY = clamped.y;
+          lastX = clamped.x;
+          lastY = clamped.y;
+
+          trail.push({ x: cursorX, y: cursorY });
+          if (trail.length > 10) trail.shift();
+
+          if ((dx !== 0 || dy !== 0) && conn && conn.open) {
+            conn.send({ type: 'move', dx: dx, dy: dy });
+          }
+        }
+      }
+    }, { passive: false });
+
+    const handleTouchEnd = (e) => {
+      for (let i = 0; i < e.changedTouches.length; i++) {
+        const touch = e.changedTouches[i];
+        if (isPadTouching && touch.identifier === padTouchId) {
+          isPadTouching = false;
+          padTouchId = null;
+          lastX = null;
+          lastY = null;
+        }
+        for (const btn of buttons) {
+          if (btn.touchId === touch.identifier) {
+            btn.pressed = false;
+            btn.touchId = null;
+            if (conn && conn.open) {
+              conn.send({ type: 'btn', button: btn.id, state: 'up' });
+            }
+          }
+        }
+      }
+    };
+    canvas.addEventListener('touchend', handleTouchEnd);
+    canvas.addEventListener('touchcancel', handleTouchEnd);
   </script>
 </body>
 </html>
