@@ -7,25 +7,32 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
   <style>
     body { margin: 0; background: #111; color: #fff; font-family: sans-serif; overflow: hidden; display: flex; }
-    #sidebar { width: 260px; padding: 20px; background: #1e1e24; display: flex; flex-direction: column; align-items: center; z-index: 10; box-sizing: border-box; }
-    #qrcode { background: #fff; padding: 10px; border-radius: 8px; margin: 10px 0; }
+    #sidebar { width: 260px; padding: 16px; background: #1e1e24; display: flex; flex-direction: column; align-items: center; z-index: 10; box-sizing: border-box; }
+    #qrcode { background: #fff; padding: 8px; border-radius: 8px; margin: 8px 0; }
     canvas { flex: 1; background: #0a0a0f; display: block; }
     .player-badge { width: 100%; padding: 8px; margin: 4px 0; border-radius: 4px; font-weight: bold; color: #000; box-sizing: border-box; }
-    .controls { width: 100%; background: #2a2a35; padding: 12px; border-radius: 8px; margin: 10px 0; text-align: center; box-sizing: border-box; }
-    .btn-group { display: flex; justify-content: center; align-items: center; gap: 15px; margin-top: 8px; }
-    button { background: #007AFF; color: #fff; border: none; border-radius: 6px; width: 36px; height: 36px; font-size: 20px; font-weight: bold; cursor: pointer; }
+    .controls { width: 100%; background: #2a2a35; padding: 10px 12px; border-radius: 8px; margin: 6px 0; text-align: center; box-sizing: border-box; }
+    .control-label { font-size: 12px; color: #ccc; margin-bottom: 6px; }
+    .btn-group { display: flex; justify-content: center; align-items: center; gap: 12px; }
+    button { background: #007AFF; color: #fff; border: none; border-radius: 6px; width: 32px; height: 32px; font-size: 18px; font-weight: bold; cursor: pointer; }
     button:active { opacity: 0.7; }
-    #puck-count { font-size: 20px; font-weight: bold; min-width: 24px; }
+    #puck-count { font-size: 18px; font-weight: bold; min-width: 24px; }
+    input[type="number"] {
+      width: 80px; padding: 6px; font-size: 16px; font-weight: bold; text-align: center;
+      background: #14141a; color: #fff; border: 1px solid #555; border-radius: 6px;
+    }
+    input[type="number"]:focus { outline: none; border-color: #007AFF; }
   </style>
 </head>
 <body>
   <div id="sidebar">
-    <h3 style="margin: 0 0 5px 0;">スマホで参加</h3>
+    <h3 style="margin: 0 0 4px 0; font-size: 16px;">スマホで参加</h3>
     <div id="qrcode"></div>
-    <p id="status" style="font-size: 12px; color: #aaa; margin: 5px 0;">ID発行中...</p>
+    <p id="status" style="font-size: 11px; color: #aaa; margin: 4px 0;">ID発行中...</p>
     
+    <!-- パックの数 -->
     <div class="controls">
-      <div style="font-size: 13px; color: #ccc;">パックの数（マルチパック）</div>
+      <div class="control-label">パックの数（マルチパック）</div>
       <div class="btn-group">
         <button onclick="changePuckCount(-1)">-</button>
         <span id="puck-count">3</span>
@@ -33,7 +40,19 @@
       </div>
     </div>
 
-    <div id="player-list" style="width: 100%; overflow-y: auto; flex: 1;"></div>
+    <!-- パックのスピード設定 -->
+    <div class="controls">
+      <div class="control-label">パック速度（上限 2〜30）</div>
+      <input type="number" id="puck-speed-input" value="11" min="2" max="30" step="1" onchange="updateSettings()">
+    </div>
+
+    <!-- マレットのスピード設定 -->
+    <div class="controls">
+      <div class="control-label">マレット速度（倍率 0.2〜4.0）</div>
+      <input type="number" id="mallet-speed-input" value="1.0" min="0.2" max="4.0" step="0.1" onchange="updateSettings()">
+    </div>
+
+    <div id="player-list" style="width: 100%; overflow-y: auto; flex: 1; margin-top: 6px;"></div>
   </div>
   <canvas id="gameCanvas"></canvas>
 
@@ -45,6 +64,27 @@
     const pucks = [];
     let targetPuckCount = 3;
 
+    // 速度設定用の変数（入力欄と連動）
+    let maxPuckSpeed = 11;
+    let minPuckSpeed = 1.8;
+    let malletSensitivity = 1.0;
+
+    function updateSettings() {
+      const puckInput = parseFloat(document.getElementById('puck-speed-input').value);
+      if (!isNaN(puckInput)) {
+        maxPuckSpeed = Math.max(2, Math.min(30, puckInput));
+        document.getElementById('puck-speed-input').value = maxPuckSpeed;
+        // 最低速度も上限に合わせてバランス調整
+        minPuckSpeed = Math.max(0.5, maxPuckSpeed * 0.16);
+      }
+
+      const malletInput = parseFloat(document.getElementById('mallet-speed-input').value);
+      if (!isNaN(malletInput)) {
+        malletSensitivity = Math.max(0.2, Math.min(4.0, malletInput));
+        document.getElementById('mallet-speed-input').value = malletSensitivity.toFixed(1);
+      }
+    }
+
     function resize() {
       canvas.width = window.innerWidth - 260;
       canvas.height = window.innerHeight;
@@ -52,10 +92,10 @@
     window.addEventListener('resize', resize);
     resize();
 
-    // パック生成関数（初速をゆっくりに変更）
+    // パック生成関数
     function createPuck() {
       const angle = Math.random() * Math.PI * 2;
-      const speed = 2.5 + Math.random() * 1.5;
+      const speed = minPuckSpeed + (maxPuckSpeed - minPuckSpeed) * 0.25;
       return {
         x: canvas.width / 2 + (Math.random() - 0.5) * 100,
         y: canvas.height / 2 + (Math.random() - 0.5) * 100,
@@ -88,8 +128,8 @@
       
       new QRCode(document.getElementById('qrcode'), {
         text: joinUrl,
-        width: 160,
-        height: 160
+        width: 140,
+        height: 140
       });
     });
 
@@ -122,8 +162,9 @@
       conn.on('data', (data) => {
         if (data.type === 'move' && players[conn.peer]) {
           const p = players[conn.peer];
-          const moveX = data.dx * 1.2;
-          const moveY = data.dy * 1.2;
+          // 入力欄の「マレット速度（malletSensitivity）」を反映
+          const moveX = data.dx * malletSensitivity;
+          const moveY = data.dy * malletSensitivity;
           p.x = Math.max(p.radius, Math.min(canvas.width - p.radius, p.x + moveX));
           p.y = Math.max(p.radius, Math.min(canvas.height - p.radius, p.y + moveY));
           p.vx = moveX;
@@ -158,16 +199,16 @@
         puck.x += puck.vx;
         puck.y += puck.vy;
 
-        // 摩擦（緩やかに減速）と最高・最低速度の制限（全体的にスローに調整）
+        // 摩擦と入力欄に基づく最高・最低速度の制限
         puck.vx *= 0.994;
         puck.vy *= 0.994;
         const currentSpeed = Math.hypot(puck.vx, puck.vy);
-        if (currentSpeed > 11) {
-          puck.vx = (puck.vx / currentSpeed) * 11;
-          puck.vy = (puck.vy / currentSpeed) * 11;
-        } else if (currentSpeed < 1.8 && currentSpeed > 0) {
-          puck.vx = (puck.vx / currentSpeed) * 1.8;
-          puck.vy = (puck.vy / currentSpeed) * 1.8;
+        if (currentSpeed > maxPuckSpeed) {
+          puck.vx = (puck.vx / currentSpeed) * maxPuckSpeed;
+          puck.vy = (puck.vy / currentSpeed) * maxPuckSpeed;
+        } else if (currentSpeed < minPuckSpeed && currentSpeed > 0) {
+          puck.vx = (puck.vx / currentSpeed) * minPuckSpeed;
+          puck.vy = (puck.vy / currentSpeed) * minPuckSpeed;
         }
 
         // 壁との反射
@@ -186,26 +227,21 @@
           if (dist < minDist && dist > 0) {
             const nx = dx / dist;
             const ny = dy / dist;
-            // めり込み解消（少し余裕を持たせて押し出す）
             puck.x = p.x + nx * (minDist + 1);
             puck.y = p.y + ny * (minDist + 1);
 
-            // パックの入射速度を法線方向で反射させる
             const dot = puck.vx * nx + puck.vy * ny;
-            // すでにマレットから離れる方向に動いている場合は二重計算しない
             let refVx = dot < 0 ? puck.vx - 2 * dot * nx : puck.vx;
             let refVy = dot < 0 ? puck.vy - 2 * dot * ny : puck.vy;
 
-            // マレットの移動速度を計算
             const hitSpeed = Math.hypot(p.vx, p.vy);
+            // パックの上限速度に合わせて最低反発力も自動スケーリング
+            const minBounce = Math.max(1.2, maxPuckSpeed * 0.22);
+            const pushSpeed = Math.max(minBounce, hitSpeed * 0.5);
 
-            // 最低限の反発スピード（2.5）を保証してくっつきを防ぐ
-            const pushSpeed = Math.max(2.5, hitSpeed * 0.6);
+            puck.vx = refVx * 0.9 + nx * pushSpeed + p.vx * 0.25;
+            puck.vy = refVy * 0.9 + ny * pushSpeed + p.vy * 0.25;
 
-            puck.vx = refVx * 0.9 + nx * pushSpeed + p.vx * 0.3;
-            puck.vy = refVy * 0.9 + ny * pushSpeed + p.vy * 0.3;
-
-            // パックに当たったら常にスマホへ振動通知
             if (p.conn && p.conn.open) {
               p.conn.send({ type: 'hit' });
             }
@@ -240,7 +276,6 @@
         }
       }
 
-      // マレットの瞬間速度を素早く減衰
       playerList.forEach(p => {
         p.vx *= 0.2;
         p.vy *= 0.2;
