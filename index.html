@@ -126,7 +126,6 @@
           const moveY = data.dy * 1.6;
           p.x = Math.max(p.radius, Math.min(canvas.width - p.radius, p.x + moveX));
           p.y = Math.max(p.radius, Math.min(canvas.height - p.radius, p.y + moveY));
-          // 打ち返し用の瞬間速度を記録
           p.vx = moveX;
           p.vy = moveY;
         }
@@ -191,13 +190,25 @@
             puck.x = p.x + nx * minDist;
             puck.y = p.y + ny * minDist;
 
-            // 反射＋マレットの勢いを加算
-            const hitSpeed = Math.hypot(p.vx, p.vy);
-            const bounceSpeed = Math.max(8, currentSpeed * 0.9 + hitSpeed * 0.7);
-            puck.vx = nx * bounceSpeed + p.vx * 0.3;
-            puck.vy = ny * bounceSpeed + p.vy * 0.3;
+            // パックの入射速度を法線方向で反射させる
+            const dot = puck.vx * nx + puck.vy * ny;
+            let refVx = puck.vx - 2 * dot * nx;
+            let refVy = puck.vy - 2 * dot * ny;
 
-            // スマホへ振動通知
+            // マレットの移動速度を計算
+            const hitSpeed = Math.hypot(p.vx, p.vy);
+
+            if (hitSpeed > 1.5) {
+              // マレットが動いている場合：打ち返しパワーを加算
+              puck.vx = refVx * 0.85 + nx * (hitSpeed * 0.6) + p.vx * 0.5;
+              puck.vy = refVy * 0.85 + ny * (hitSpeed * 0.6) + p.vy * 0.5;
+            } else {
+              // マレットが止まっている場合：元のスピードのまま自然に跳ね返す
+              puck.vx = refVx * 0.95;
+              puck.vy = refVy * 0.95;
+            }
+
+            // パックに当たったら常にスマホへ振動通知
             if (p.conn && p.conn.open) {
               p.conn.send({ type: 'hit' });
             }
@@ -221,7 +232,6 @@
             other.x += nx * overlap;
             other.y += ny * overlap;
 
-            // 速度の交換（弾性衝突）
             const kx = puck.vx - other.vx;
             const ky = puck.vy - other.vy;
             const pVal = 2 * (nx * kx + ny * ky) / 2;
@@ -233,10 +243,10 @@
         }
       }
 
-      // マレットの瞬間速度をリセット（指を止めたら速度0にする）
+      // マレットの瞬間速度を素早く減衰（指を止めた瞬間にしっかり止まるようにする）
       playerList.forEach(p => {
-        p.vx *= 0.5;
-        p.vy *= 0.5;
+        p.vx *= 0.2;
+        p.vy *= 0.2;
       });
     }
 
