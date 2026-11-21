@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <title>8人マルチパック・エアホッケー</title>
+  <title>最大15人マルチパック・エアホッケー</title>
   <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
   <style>
@@ -10,7 +10,7 @@
     #sidebar { width: 260px; padding: 14px; background: #1e1e24; display: flex; flex-direction: column; align-items: center; z-index: 10; box-sizing: border-box; }
     #qrcode { background: #fff; padding: 6px; border-radius: 8px; margin: 6px 0; }
     canvas { flex: 1; background: #0a0a0f; display: block; }
-    .player-badge { width: 100%; padding: 6px 10px; margin: 3px 0; border-radius: 4px; font-weight: bold; color: #000; box-sizing: border-box; display: flex; justify-content: space-between; align-items: center; font-size: 14px; }
+    .player-badge { width: 100%; padding: 5px 10px; margin: 2px 0; border-radius: 4px; font-weight: bold; color: #000; box-sizing: border-box; display: flex; justify-content: space-between; align-items: center; font-size: 13px; }
     .player-badge.eliminated { opacity: 0.35; text-decoration: line-through; }
     .controls { width: 100%; background: #2a2a35; padding: 8px 10px; border-radius: 8px; margin: 4px 0; text-align: center; box-sizing: border-box; }
     .control-label { font-size: 11px; color: #ccc; margin-bottom: 4px; }
@@ -28,7 +28,7 @@
 </head>
 <body>
   <div id="sidebar">
-    <h3 style="margin: 0 0 2px 0; font-size: 15px;">スマホで参加</h3>
+    <h3 style="margin: 0 0 2px 0; font-size: 15px;">スマホで参加（最大15人）</h3>
     <div id="qrcode"></div>
     <p id="status" style="font-size: 10px; color: #aaa; margin: 2px 0;">ID発行中...</p>
 
@@ -61,7 +61,13 @@
   <script>
     const canvas = document.getElementById('gameCanvas');
     const ctx = canvas.getContext('2d');
-    const colors = ['#FF3B30', '#007AFF', '#34C759', '#FFCC00', '#AF52DE', '#FF9500', '#5AC8FA', '#FF2D55'];
+    // 最大15人分の識別しやすいカラーパレット
+    const colors = [
+      '#FF3B30', '#007AFF', '#34C759', '#FFCC00', '#AF52DE',
+      '#FF9500', '#5AC8FA', '#FF2D55', '#A2845E', '#00C7BE',
+      '#30B0C7', '#32ADE6', '#5856D6', '#FF6482', '#FFD60A'
+    ];
+    const MAX_PLAYERS = 15;
     const players = {};
     const pucks = [];
     let targetPuckCount = 3;
@@ -77,51 +83,138 @@
     let winnerText = '';
     let goalFlash = { timer: 0, color: '#fff' };
 
-    // 正八角形アリーナパラメータ
-    let arena = { cx: 0, cy: 0, R: 0, vertices: [], edges: [] };
+    // 可変アリーナパラメータ
+    let arena = { cx: 0, cy: 0, R: 0, vertices: [], edges: [], shapeName: '' };
 
+    // 辺データ生成ヘルパー（v1->v2 の時計回り頂点から内側法線・ゴール有無を設定）
+    function makeEdge(v1, v2, isGoalEdge) {
+      const mx = (v1.x + v2.x) / 2;
+      const my = (v1.y + v2.y) / 2;
+      const dx = v2.x - v1.x;
+      const dy = v2.y - v1.y;
+      const len = Math.hypot(dx, dy);
+      const tx = dx / len;
+      const ty = dy / len;
+      // 時計回りの頂点順なので、右向き法線 (-ty, tx) が必ず多角形の内側を向く
+      const nx = -ty;
+      const ny = tx;
+      return { v1, v2, mx, my, tx, ty, len, nx, ny, isGoalEdge };
+    }
+
+    // 参加人数に応じてグラウンド形状を再構築
     function buildArena() {
       canvas.width = window.innerWidth - 260;
       canvas.height = window.innerHeight;
       arena.cx = canvas.width / 2;
       arena.cy = canvas.height / 2;
-      arena.R = Math.min(canvas.width, canvas.height) * 0.45;
+      const minDim = Math.min(canvas.width, canvas.height);
+      arena.R = minDim * 0.44;
+
+      const playerList = Object.values(players).sort((a, b) => a.num - b.num);
+      const count = playerList.length;
 
       arena.vertices = [];
-      // 8角形の各辺が水平・垂直・45度になるよう22.5度ずらして頂点を配置
-      for (let i = 0; i < 8; i++) {
-        const angle = (i * Math.PI / 4) + (Math.PI / 8);
-        arena.vertices.push({
-          x: arena.cx + arena.R * Math.cos(angle),
-          y: arena.cy + arena.R * Math.sin(angle)
-        });
-      }
-
       arena.edges = [];
-      for (let i = 0; i < 8; i++) {
-        const v1 = arena.vertices[i];
-        const v2 = arena.vertices[(i + 1) % 8];
-        const mx = (v1.x + v2.x) / 2;
-        const my = (v1.y + v2.y) / 2;
-        const dx = v2.x - v1.x;
-        const dy = v2.y - v1.y;
-        const len = Math.hypot(dx, dy);
-        // 内側へ向かう法線ベクトル
-        const nx = -(arena.cx - mx) !== 0 || -(arena.cy - my) !== 0
-          ? (arena.cx - mx) / Math.hypot(arena.cx - mx, arena.cy - my)
-          : 0;
-        const ny = (arena.cy - my) / Math.hypot(arena.cx - mx, arena.cy - my);
 
-        arena.edges.push({
-          index: i,
-          v1, v2,
-          mx, my,
-          tx: dx / len,
-          ty: dy / len,
-          len,
-          nx, ny
-        });
+      if (count <= 1) {
+        // 0〜1人：練習用の正方形
+        arena.shapeName = '練習モード（正方形）';
+        const half = minDim * 0.4;
+        const v = [
+          { x: arena.cx - half, y: arena.cy - half },
+          { x: arena.cx + half, y: arena.cy - half },
+          { x: arena.cx + half, y: arena.cy + half },
+          { x: arena.cx - half, y: arena.cy + half }
+        ];
+        arena.vertices = v;
+        arena.edges = [
+          makeEdge(v[2], v[3], count === 1), // 下辺（1人目のゴール）
+          makeEdge(v[0], v[1], false),       // 上辺（壁）
+          makeEdge(v[1], v[2], false),       // 右辺（壁）
+          makeEdge(v[3], v[0], false)        // 左辺（壁）
+        ];
+      } else if (count === 2) {
+        // 2人：横長の長方形（左辺と右辺がゴール、上下は壁）
+        arena.shapeName = '2人対戦：長方形コート';
+        const halfW = Math.min(canvas.width * 0.45, minDim * 0.62);
+        const halfH = minDim * 0.36;
+        const v = [
+          { x: arena.cx - halfW, y: arena.cy - halfH }, // 0: 左上
+          { x: arena.cx + halfW, y: arena.cy - halfH }, // 1: 右上
+          { x: arena.cx + halfW, y: arena.cy + halfH }, // 2: 右下
+          { x: arena.cx - halfW, y: arena.cy + halfH }  // 3: 左下
+        ];
+        arena.vertices = v;
+        arena.edges = [
+          makeEdge(v[3], v[0], true),  // P1: 左辺ゴール
+          makeEdge(v[1], v[2], true),  // P2: 右辺ゴール
+          makeEdge(v[0], v[1], false), // 上壁
+          makeEdge(v[2], v[3], false)  // 下壁
+        ];
+      } else if (count === 3) {
+        // 3人：正三角形（3辺すべてゴール）
+        arena.shapeName = '3人対戦：正三角形コート';
+        const r = minDim * 0.48;
+        for (let i = 0; i < 3; i++) {
+          // 頂点が真上に来る正三角形
+          const angle = -Math.PI / 2 + (i * Math.PI * 2) / 3;
+          arena.vertices.push({
+            x: arena.cx + r * Math.cos(angle),
+            y: arena.cy + r * Math.sin(angle)
+          });
+        }
+        for (let i = 0; i < 3; i++) {
+          arena.edges.push(makeEdge(arena.vertices[i], arena.vertices[(i + 1) % 3], true));
+        }
+      } else if (count === 4) {
+        // 4人：横長長方形（4辺すべてゴール）
+        arena.shapeName = '4人対戦：長方形コート';
+        const halfW = Math.min(canvas.width * 0.44, minDim * 0.54);
+        const halfH = minDim * 0.40;
+        const v = [
+          { x: arena.cx - halfW, y: arena.cy - halfH }, // 0: 左上
+          { x: arena.cx + halfW, y: arena.cy - halfH }, // 1: 右上
+          { x: arena.cx + halfW, y: arena.cy + halfH }, // 2: 右下
+          { x: arena.cx - halfW, y: arena.cy + halfH }  // 3: 左下
+        ];
+        arena.vertices = v;
+        arena.edges = [
+          makeEdge(v[2], v[3], true), // P1: 下辺
+          makeEdge(v[0], v[1], true), // P2: 上辺
+          makeEdge(v[3], v[0], true), // P3: 左辺
+          makeEdge(v[1], v[2], true)  // P4: 右辺
+        ];
+      } else {
+        // 5〜15人：正N角形（全辺が各プレイヤーのゴール）
+        arena.shapeName = `${count}人対戦：正${count}角形コート`;
+        const n = count;
+        // 下辺が水平になるよう開始角度を調整
+        const startAngle = Math.PI / 2 - Math.PI / n;
+        for (let i = 0; i < n; i++) {
+          const angle = startAngle + (i * Math.PI * 2) / n;
+          arena.vertices.push({
+            x: arena.cx + arena.R * Math.cos(angle),
+            y: arena.cy + arena.R * Math.sin(angle)
+          });
+        }
+        for (let i = 0; i < n; i++) {
+          arena.edges.push(makeEdge(arena.vertices[i], arena.vertices[(i + 1) % n], true));
+        }
       }
+
+      // ゴール辺に各プレイヤーを再割り当て（ゲーム待機中なら初期位置も移動）
+      const goalEdges = arena.edges.filter(e => e.isGoalEdge);
+      const malletRadius = count >= 10 ? 18 : (count >= 6 ? 22 : 26);
+
+      playerList.forEach((p, idx) => {
+        p.edgeIndex = arena.edges.indexOf(goalEdges[idx]);
+        p.radius = malletRadius;
+        if (gameState === 'waiting') {
+          const edge = arena.edges[p.edgeIndex];
+          p.x = edge.mx + edge.nx * (malletRadius + 24);
+          p.y = edge.my + edge.ny * (malletRadius + 24);
+        }
+      });
     }
     window.addEventListener('resize', buildArena);
     buildArena();
@@ -144,11 +237,11 @@
       const angle = Math.random() * Math.PI * 2;
       const speed = minPuckSpeed + (maxPuckSpeed - minPuckSpeed) * 0.25;
       return {
-        x: arena.cx + (Math.random() - 0.5) * 60,
-        y: arena.cy + (Math.random() - 0.5) * 60,
+        x: arena.cx + (Math.random() - 0.5) * 40,
+        y: arena.cy + (Math.random() - 0.5) * 40,
         vx: Math.cos(angle) * speed,
         vy: Math.sin(angle) * speed,
-        radius: 15,
+        radius: 14,
         color: '#00ffcc'
       };
     }
@@ -156,8 +249,8 @@
     function resetPuck(puck) {
       const angle = Math.random() * Math.PI * 2;
       const speed = minPuckSpeed + (maxPuckSpeed - minPuckSpeed) * 0.25;
-      puck.x = arena.cx + (Math.random() - 0.5) * 40;
-      puck.y = arena.cy + (Math.random() - 0.5) * 40;
+      puck.x = arena.cx + (Math.random() - 0.5) * 30;
+      puck.y = arena.cy + (Math.random() - 0.5) * 30;
       puck.vx = Math.cos(angle) * speed;
       puck.vy = Math.sin(angle) * speed;
     }
@@ -174,20 +267,20 @@
     }
     syncPuckCount();
 
-    // ゲーム開始・リセット処理
     function startGame() {
-      const playerList = Object.values(players);
+      const playerList = Object.values(players).sort((a, b) => a.num - b.num);
       if (playerList.length === 0) {
         alert('先にスマホを1台以上接続してください！');
         return;
       }
+      gameState = 'waiting';
+      buildArena();
       playerList.forEach(p => {
         p.life = INITIAL_LIFE;
         p.alive = true;
-        // 自分のゴール辺の少し内側に初期配置
-        const edge = arena.edges[p.slot];
-        p.x = edge.mx + edge.nx * 55;
-        p.y = edge.my + edge.ny * 55;
+        const edge = arena.edges[p.edgeIndex];
+        p.x = edge.mx + edge.nx * (p.radius + 24);
+        p.y = edge.my + edge.ny * (p.radius + 24);
         p.vx = 0;
         p.vy = 0;
       });
@@ -204,57 +297,61 @@
       document.getElementById('status').innerText = 'ID: ' + id;
       const baseUrl = window.location.href.substring(0, window.location.href.lastIndexOf('/') + 1);
       const joinUrl = `${baseUrl}controller.html?host=${id}`;
-      new QRCode(document.getElementById('qrcode'), { text: joinUrl, width: 130, height: 130 });
+      new QRCode(document.getElementById('qrcode'), { text: joinUrl, width: 125, height: 125 });
     });
 
     peer.on('connection', (conn) => {
-      // 空いているスロット（0〜7）を探す
-      const usedSlots = new Set(Object.values(players).map(p => p.slot));
-      let slot = -1;
-      for (let i = 0; i < 8; i++) {
-        if (!usedSlots.has(i)) { slot = i; break; }
+      const usedNums = new Set(Object.values(players).map(p => p.num));
+      let num = -1;
+      for (let i = 1; i <= MAX_PLAYERS; i++) {
+        if (!usedNums.has(i)) { num = i; break; }
       }
-      if (slot === -1) { conn.close(); return; }
+      if (num === -1) { conn.close(); return; }
 
-      const color = colors[slot];
-      const edge = arena.edges[slot];
+      const color = colors[num - 1];
       players[conn.peer] = {
         id: conn.peer,
         conn: conn,
-        slot: slot,
-        num: slot + 1,
+        num: num,
+        edgeIndex: 0,
         color: color,
         life: INITIAL_LIFE,
         alive: true,
-        x: edge.mx + edge.nx * 55,
-        y: edge.my + edge.ny * 55,
+        x: arena.cx,
+        y: arena.cy,
         vx: 0,
         vy: 0,
         radius: 26
       };
+
+      // 人数が変わったらグラウンド形状を再構築
+      if (gameState !== 'playing') {
+        buildArena();
+      }
       updatePlayerList();
 
       conn.on('open', () => {
-        conn.send({ type: 'init', color: color, num: slot + 1 });
+        conn.send({ type: 'init', color: color, num: num });
       });
 
       conn.on('data', (data) => {
         if (data.type === 'move' && players[conn.peer]) {
           const p = players[conn.peer];
-          if (!p.alive) return; // 脱落後は操作不可
+          if (!p.alive) return;
 
           const moveX = data.dx * malletSensitivity;
           const moveY = data.dy * malletSensitivity;
           let nextX = p.x + moveX;
           let nextY = p.y + moveY;
 
-          // マレットが八角形の外に出ないよう制限
-          const distFromCenter = Math.hypot(nextX - arena.cx, nextY - arena.cy);
-          const maxR = arena.R * 0.92 - p.radius;
-          if (distFromCenter > maxR) {
-            const ang = Math.atan2(nextY - arena.cy, nextX - arena.cx);
-            nextX = arena.cx + Math.cos(ang) * maxR;
-            nextY = arena.cy + Math.sin(ang) * maxR;
+          // マレットが現在の多角形コートの壁を超えないように制限
+          for (let i = 0; i < arena.edges.length; i++) {
+            const edge = arena.edges[i];
+            const distToEdge = (nextX - edge.v1.x) * edge.nx + (nextY - edge.v1.y) * edge.ny;
+            if (distToEdge < p.radius) {
+              nextX += edge.nx * (p.radius - distToEdge);
+              nextY += edge.ny * (p.radius - distToEdge);
+            }
           }
 
           p.x = nextX;
@@ -266,6 +363,9 @@
 
       conn.on('close', () => {
         delete players[conn.peer];
+        if (gameState !== 'playing') {
+          buildArena();
+        }
         updatePlayerList();
       });
     });
@@ -273,7 +373,7 @@
     function updatePlayerList() {
       const list = document.getElementById('player-list');
       list.innerHTML = '';
-      Object.values(players).sort((a, b) => a.slot - b.slot).forEach(p => {
+      Object.values(players).sort((a, b) => a.num - b.num).forEach(p => {
         const div = document.createElement('div');
         div.className = 'player-badge' + (p.alive ? '' : ' eliminated');
         div.style.background = p.color;
@@ -283,14 +383,12 @@
       });
     }
 
-    // 物理演算＆ゴール判定
     function updatePhysics() {
       const playerList = Object.values(players);
       const alivePlayers = playerList.filter(p => p.alive);
 
-      // スロット番号 -> 生存プレイヤーのマップ作成
-      const slotOwner = {};
-      alivePlayers.forEach(p => { slotOwner[p.slot] = p; });
+      const edgeOwner = {};
+      alivePlayers.forEach(p => { edgeOwner[p.edgeIndex] = p; });
 
       for (let i = 0; i < pucks.length; i++) {
         const puck = pucks[i];
@@ -308,21 +406,18 @@
           puck.vy = (puck.vy / currentSpeed) * minPuckSpeed;
         }
 
-        // 正八角形の各辺との衝突・ゴール判定
-        for (let eIdx = 0; eIdx < 8; eIdx++) {
+        // 各辺との衝突・ゴール判定
+        for (let eIdx = 0; eIdx < arena.edges.length; eIdx++) {
           const edge = arena.edges[eIdx];
-          // 辺からパック中心までの内側距離（内積）
           const distToEdge = (puck.x - edge.v1.x) * edge.nx + (puck.y - edge.v1.y) * edge.ny;
 
           if (distToEdge < puck.radius) {
-            const owner = slotOwner[eIdx];
-            // 辺に沿った位置（0 〜 edge.len）
+            const owner = edgeOwner[eIdx];
             const along = (puck.x - edge.v1.x) * edge.tx + (puck.y - edge.v1.y) * edge.ty;
-            // ゴール開口幅は辺の中央75%（両端12.5%はポスト壁）
-            const inGoalMouth = along > edge.len * 0.125 && along < edge.len * 0.875;
+            // ゴール開口幅は辺の中央76%（両端12%はポスト壁）
+            const inGoalMouth = along > edge.len * 0.12 && along < edge.len * 0.88;
 
             if (gameState === 'playing' && owner && inGoalMouth) {
-              // ゴールラインを完全に割ったら失点処理
               if (distToEdge < -puck.radius * 0.3) {
                 owner.life = Math.max(0, owner.life - 1);
                 goalFlash = { timer: 15, color: owner.color };
@@ -337,7 +432,6 @@
                 updatePlayerList();
                 resetPuck(puck);
 
-                // 勝敗チェック（2人以上参加時、残り1人になったら終了）
                 const remaining = Object.values(players).filter(p => p.alive);
                 if (Object.keys(players).length >= 2 && remaining.length <= 1) {
                   gameState = 'gameover';
@@ -348,7 +442,7 @@
                 break;
               }
             } else {
-              // 空き辺・ポスト・待機中は壁として跳ね返す
+              // 壁として跳ね返す
               puck.x += edge.nx * (puck.radius - distToEdge);
               puck.y += edge.ny * (puck.radius - distToEdge);
               const dot = puck.vx * edge.nx + puck.vy * edge.ny;
@@ -360,7 +454,7 @@
           }
         }
 
-        // マレットとの衝突判定（生存プレイヤーのみ）
+        // マレットとの衝突判定
         alivePlayers.forEach(p => {
           const dx = puck.x - p.x;
           const dy = puck.y - p.y;
@@ -421,14 +515,12 @@
       playerList.forEach(p => { p.vx *= 0.2; p.vy *= 0.2; });
     }
 
-    // 描画ループ
     function loop() {
       updatePhysics();
 
       ctx.fillStyle = 'rgba(10, 10, 15, 0.4)';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-      // ゴール時のフラッシュ背景
       if (goalFlash.timer > 0) {
         ctx.fillStyle = goalFlash.color;
         ctx.globalAlpha = (goalFlash.timer / 15) * 0.25;
@@ -437,35 +529,40 @@
         goalFlash.timer--;
       }
 
-      // 中央のサークル装飾
+      // 現在のコート形状名を左上に表示
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.45)';
+      ctx.font = 'bold 14px sans-serif';
+      ctx.textAlign = 'left';
+      ctx.fillText(arena.shapeName, 16, 26);
+
+      // 中央サークル装飾
       ctx.beginPath();
-      ctx.arc(arena.cx, arena.cy, arena.R * 0.22, 0, Math.PI * 2);
+      ctx.arc(arena.cx, arena.cy, Math.min(canvas.width, canvas.height) * 0.1, 0, Math.PI * 2);
       ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
       ctx.lineWidth = 2;
       ctx.stroke();
 
-      // 生存プレイヤーのマップ
-      const slotOwner = {};
-      Object.values(players).filter(p => p.alive).forEach(p => { slotOwner[p.slot] = p; });
+      const edgeOwner = {};
+      Object.values(players).filter(p => p.alive).forEach(p => { edgeOwner[p.edgeIndex] = p; });
 
-      // 正八角形の壁とゴールラインの描画
-      for (let i = 0; i < 8; i++) {
+      // アリーナの壁とゴールライン描画
+      for (let i = 0; i < arena.edges.length; i++) {
         const edge = arena.edges[i];
-        const owner = slotOwner[i];
+        const owner = edgeOwner[i];
 
         if (owner) {
-          // ゴール開口部（プレイヤーカラーで点線＆発光）
-          const g1x = edge.v1.x + edge.tx * (edge.len * 0.125);
-          const g1y = edge.v1.y + edge.ty * (edge.len * 0.125);
-          const g2x = edge.v1.x + edge.tx * (edge.len * 0.875);
-          const g2y = edge.v1.y + edge.ty * (edge.len * 0.875);
+          const g1x = edge.v1.x + edge.tx * (edge.len * 0.12);
+          const g1y = edge.v1.y + edge.ty * (edge.len * 0.12);
+          const g2x = edge.v1.x + edge.tx * (edge.len * 0.88);
+          const g2y = edge.v1.y + edge.ty * (edge.len * 0.88);
 
+          // ゴールライン
           ctx.beginPath();
           ctx.moveTo(g1x, g1y);
           ctx.lineTo(g2x, g2y);
           ctx.strokeStyle = owner.color;
           ctx.lineWidth = 6;
-          ctx.setLineDash([10, 8]);
+          ctx.setLineDash([8, 6]);
           ctx.stroke();
           ctx.setLineDash([]);
 
@@ -479,16 +576,16 @@
           ctx.lineWidth = 6;
           ctx.stroke();
 
-          // ゴール外側にプレイヤー番号と残りライフを表示
+          // ゴール外側のラベル（人数が多い時は文字サイズを自動調整）
           const labelX = edge.mx - edge.nx * 24;
           const labelY = edge.my - edge.ny * 24;
           ctx.fillStyle = owner.color;
-          ctx.font = 'bold 14px sans-serif';
+          ctx.font = Object.keys(players).length >= 10 ? 'bold 12px sans-serif' : 'bold 14px sans-serif';
           ctx.textAlign = 'center';
           ctx.textBaseline = 'middle';
-          ctx.fillText(`P${owner.num} (${owner.life})`, labelX, labelY);
+          ctx.fillText(`P${owner.num}(${owner.life})`, labelX, labelY);
         } else {
-          // 空き辺・脱落辺は硬い壁として描画
+          // 壁または脱落済みゴール
           ctx.beginPath();
           ctx.moveTo(edge.v1.x, edge.v1.y);
           ctx.lineTo(edge.v2.x, edge.v2.y);
@@ -498,12 +595,12 @@
         }
       }
 
-      // パックの描画
+      // パック描画
       pucks.forEach(puck => {
         ctx.beginPath();
         ctx.arc(puck.x, puck.y, puck.radius, 0, Math.PI * 2);
         ctx.fillStyle = puck.color;
-        ctx.shadowBlur = 16;
+        ctx.shadowBlur = 14;
         ctx.shadowColor = puck.color;
         ctx.fill();
         ctx.shadowBlur = 0;
@@ -514,34 +611,34 @@
         ctx.fill();
       });
 
-      // マレットの描画（生存プレイヤーのみ）
+      // マレット描画
       Object.values(players).filter(p => p.alive).forEach(p => {
         ctx.beginPath();
         ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
         ctx.fillStyle = p.color;
-        ctx.shadowBlur = 14;
+        ctx.shadowBlur = 12;
         ctx.shadowColor = p.color;
         ctx.fill();
         ctx.shadowBlur = 0;
 
         ctx.fillStyle = '#fff';
-        ctx.font = 'bold 15px sans-serif';
+        ctx.font = p.radius < 20 ? 'bold 12px sans-serif' : 'bold 14px sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillText(p.num, p.x, p.y);
       });
 
-      // 待機中・決着時のメッセージオーバーレイ
+      // オーバーレイ表示
       if (gameState === 'waiting') {
         ctx.fillStyle = 'rgba(255, 255, 255, 0.75)';
-        ctx.font = 'bold 20px sans-serif';
+        ctx.font = 'bold 18px sans-serif';
         ctx.textAlign = 'center';
         ctx.fillText('参加者が揃ったら「ゲーム開始」を押してください', arena.cx, arena.cy);
       } else if (gameState === 'gameover') {
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.65)';
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
         ctx.fillRect(arena.cx - 200, arena.cy - 45, 400, 90);
         ctx.fillStyle = '#FFCC00';
-        ctx.font = 'bold 32px sans-serif';
+        ctx.font = 'bold 30px sans-serif';
         ctx.textAlign = 'center';
         ctx.fillText(winnerText, arena.cx, arena.cy);
       }
