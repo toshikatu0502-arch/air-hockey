@@ -7,7 +7,7 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
   <style>
     body { margin: 0; background: #111; color: #fff; font-family: sans-serif; overflow: hidden; display: flex; }
-    #sidebar { width: 260px; padding: 12px; background: #1e1e24; display: flex; flex-direction: column; align-items: center; z-index: 10; box-sizing: border-box; }
+    #sidebar { width: 250px; padding: 12px; background: #1e1e24; display: flex; flex-direction: column; align-items: center; z-index: 10; box-sizing: border-box; }
     #qrcode { background: #fff; padding: 6px; border-radius: 8px; margin: 4px 0; }
     canvas { flex: 1; background: #0a0a0f; display: block; }
     .player-badge { width: 100%; padding: 5px 10px; margin: 2px 0; border-radius: 4px; font-weight: bold; color: #000; box-sizing: border-box; display: flex; justify-content: space-between; align-items: center; font-size: 13px; }
@@ -20,7 +20,7 @@
     button:active { opacity: 0.75; }
     .count-val { font-size: 15px; font-weight: bold; min-width: 20px; }
     input[type="number"] {
-      width: 68px; padding: 4px; font-size: 14px; font-weight: bold; text-align: center;
+      width: 66px; padding: 4px; font-size: 14px; font-weight: bold; text-align: center;
       background: #14141a; color: #fff; border: 1px solid #555; border-radius: 6px;
     }
     input[type="number"]:focus { outline: none; border-color: #007AFF; }
@@ -97,7 +97,7 @@
     let winnerText = '';
     let goalFlash = { timer: 0, color: '#fff' };
 
-    let arena = { cx: 0, cy: 0, R: 0, vertices: [], edges: [], shapeName: '' };
+    let arena = { cx: 0, cy: 0, rx: 0, ry: 0, vertices: [], edges: [], shapeName: '' };
 
     function setGoalRatio(ratio) {
       goalRatio = ratio;
@@ -181,14 +181,19 @@
       return { v1, v2, mx, my, tx, ty, len, nx, ny, isGoalEdge, maxZoneDepth };
     }
 
-    // 4人までは四角形、5人以上は正N角形（五角形〜十五角形）に自動変形
+    // 画面の横幅・高さめいっぱいまで自動フィットさせてコートを構築
     function buildArena(resetPositions = false) {
-      canvas.width = window.innerWidth - 260;
+      const sidebarWidth = document.getElementById('sidebar').offsetWidth || 250;
+      canvas.width = window.innerWidth - sidebarWidth;
       canvas.height = window.innerHeight;
       arena.cx = canvas.width / 2;
       arena.cy = canvas.height / 2;
-      const minDim = Math.min(canvas.width, canvas.height);
-      arena.R = minDim * 0.45;
+
+      // ラベル表示用の最小マージンだけ残して画面いっぱいに広げる
+      const marginX = 54;
+      const marginY = 44;
+      arena.rx = Math.max(120, canvas.width / 2 - marginX);
+      arena.ry = Math.max(120, canvas.height / 2 - marginY);
 
       const playerList = Object.values(players).sort((a, b) => a.num - b.num);
       const count = playerList.length;
@@ -197,15 +202,16 @@
       arena.edges = [];
 
       if (count <= 1) {
-        // 0〜1人：四角形（練習用）
+        // 0〜1人：横長ワイド四角形（練習用）
         setGoalRatio(0.36);
-        arena.shapeName = '待機中（四角形コート）';
-        const half = minDim * 0.42;
+        arena.shapeName = '待機中（ワイド四角形コート）';
+        const halfW = arena.rx;
+        const halfH = arena.ry;
         const v = [
-          { x: arena.cx - half, y: arena.cy - half },
-          { x: arena.cx + half, y: arena.cy - half },
-          { x: arena.cx + half, y: arena.cy + half },
-          { x: arena.cx - half, y: arena.cy + half }
+          { x: arena.cx - halfW, y: arena.cy - halfH },
+          { x: arena.cx + halfW, y: arena.cy - halfH },
+          { x: arena.cx + halfW, y: arena.cy + halfH },
+          { x: arena.cx - halfW, y: arena.cy + halfH }
         ];
         arena.vertices = v;
         arena.edges = [
@@ -215,11 +221,11 @@
           makeEdge(v[3], v[0], false)
         ];
       } else if (count === 2) {
-        // 2人：横長の四角形（左右2辺がゴール、上下2辺は壁）
+        // 2人：画面めいっぱいの横長四角形（左右2辺がゴール、上下2辺は壁）
         setGoalRatio(0.38);
-        arena.shapeName = '2人対戦：四角形コート';
-        const halfW = Math.min(canvas.width * 0.46, minDim * 0.65);
-        const halfH = minDim * 0.38;
+        arena.shapeName = '2人対戦：ワイド四角形コート';
+        const halfW = arena.rx;
+        const halfH = arena.ry;
         const v = [
           { x: arena.cx - halfW, y: arena.cy - halfH },
           { x: arena.cx + halfW, y: arena.cy - halfH },
@@ -234,11 +240,11 @@
           makeEdge(v[2], v[3], false)  // 下壁
         ];
       } else if (count === 3) {
-        // 3人：四角形（4辺のうち3辺がゴール、上辺1つが壁）
+        // 3人：画面めいっぱいの四角形（左右・下の3辺がゴール、上辺が壁）
         setGoalRatio(0.34);
-        arena.shapeName = '3人対戦：四角形コート（3辺ゴール）';
-        const halfW = Math.min(canvas.width * 0.45, minDim * 0.56);
-        const halfH = minDim * 0.42;
+        arena.shapeName = '3人対戦：ワイド四角形コート（3辺ゴール）';
+        const halfW = arena.rx;
+        const halfH = arena.ry;
         const v = [
           { x: arena.cx - halfW, y: arena.cy - halfH },
           { x: arena.cx + halfW, y: arena.cy - halfH },
@@ -253,11 +259,11 @@
           makeEdge(v[0], v[1], false)  // 上辺（壁）
         ];
       } else if (count === 4) {
-        // 4人：四角形（上下左右の4辺すべてがゴール）
+        // 4人：画面めいっぱいの四角形（上下左右の4辺すべてがゴール）
         setGoalRatio(0.34);
-        arena.shapeName = '4人対戦：四角形コート（4辺ゴール）';
-        const halfW = Math.min(canvas.width * 0.45, minDim * 0.56);
-        const halfH = minDim * 0.42;
+        arena.shapeName = '4人対戦：ワイド四角形コート（4辺ゴール）';
+        const halfW = arena.rx;
+        const halfH = arena.ry;
         const v = [
           { x: arena.cx - halfW, y: arena.cy - halfH },
           { x: arena.cx + halfW, y: arena.cy - halfH },
@@ -272,16 +278,16 @@
           makeEdge(v[1], v[2], true)  // P4: 右辺
         ];
       } else {
-        // 5〜15人：五角形から十五角形まで徐々に角を増やす
+        // 5〜15人：画面の縦横比率に合わせて横長にフィットしたN角形（五角形〜十五角形）
         setGoalRatio(count <= 6 ? 0.38 : 0.45);
-        arena.shapeName = `${count}人対戦：正${count}角形コート`;
+        arena.shapeName = `${count}人対戦：ワイド${count}角形コート`;
         const n = count;
         const startAngle = Math.PI / 2 - Math.PI / n;
         for (let i = 0; i < n; i++) {
           const angle = startAngle + (i * Math.PI * 2) / n;
           arena.vertices.push({
-            x: arena.cx + arena.R * Math.cos(angle),
-            y: arena.cy + arena.R * Math.sin(angle)
+            x: arena.cx + arena.rx * Math.cos(angle),
+            y: arena.cy + arena.ry * Math.sin(angle)
           });
         }
         for (let i = 0; i < n; i++) {
@@ -742,8 +748,8 @@
         ctx.globalAlpha = 1.0;
 
         ctx.beginPath();
-        ctx.moveTo(edge.v1.x + edge.nx * depth - edge.tx * 200, edge.v1.y + edge.ny * depth - edge.ty * 200);
-        ctx.lineTo(edge.v2.x + edge.nx * depth + edge.tx * 200, edge.v2.y + edge.ny * depth + edge.ty * 200);
+        ctx.moveTo(edge.v1.x + edge.nx * depth - edge.tx * 500, edge.v1.y + edge.ny * depth - edge.ty * 500);
+        ctx.lineTo(edge.v2.x + edge.nx * depth + edge.tx * 500, edge.v2.y + edge.ny * depth + edge.ty * 500);
         ctx.strokeStyle = owner.color;
         ctx.globalAlpha = 0.35;
         ctx.lineWidth = 2;
