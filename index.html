@@ -77,12 +77,11 @@
       '#30B0C7', '#32ADE6', '#5856D6', '#FF6482', '#FFD60A'
     ];
     const MAX_PLAYERS = 15;
-    const players = {}; // 人間＋CPUの両方を管理
+    const players = {};
     const pucks = [];
     let targetPuckCount = 3;
-    let autoCpuAdded = false; // 1人参加時の自動CPU追加フラグ
+    let autoCpuAdded = false;
 
-    // 速度・ゴール幅・自陣エリア設定
     let maxPuckSpeed = 11;
     let minPuckSpeed = 1.8;
     let malletSensitivity = 1.0;
@@ -92,7 +91,6 @@
     const GOAL_END = 1 - GOAL_START;
     const ZONE_DEPTH_RATIO = 0.45;
 
-    // ゲーム状態管理
     const INITIAL_LIFE = 5;
     let gameState = 'waiting';
     let winnerText = '';
@@ -127,8 +125,7 @@
         y: arena.cy,
         vx: 0,
         vy: 0,
-        radius: 26,
-        aiPhase: Math.random() * Math.PI * 2
+        radius: 26
       };
       return true;
     }
@@ -142,16 +139,26 @@
       return false;
     }
 
+    // CPUの数を変更したときは、試合中であってもコート形状と配置を即座に更新する
     function changeCpuCount(delta) {
+      let changed = false;
       if (delta > 0) {
-        addCpuPlayer();
+        changed = addCpuPlayer();
+        if (changed) autoCpuAdded = false; // 手動で増やしたら自動管理フラグを解除
       } else {
-        removeOneCpuPlayer();
+        changed = removeOneCpuPlayer();
+        if (changed) autoCpuAdded = false;
       }
-      if (gameState !== 'playing') {
-        buildArena();
+
+      if (changed) {
+        // コート形状を再構築して全員を正しいゴール辺へ再配置
+        buildArena(true);
+        if (gameState === 'gameover') {
+          gameState = 'waiting';
+          winnerText = '';
+        }
+        updatePlayerList();
       }
-      updatePlayerList();
     }
 
     function makeEdge(v1, v2, isGoalEdge) {
@@ -169,7 +176,7 @@
       return { v1, v2, mx, my, tx, ty, len, nx, ny, isGoalEdge, maxZoneDepth };
     }
 
-    function buildArena() {
+    function buildArena(resetPositions = false) {
       canvas.width = window.innerWidth - 260;
       canvas.height = window.innerHeight;
       arena.cx = canvas.width / 2;
@@ -266,18 +273,24 @@
       const malletRadius = count >= 10 ? 18 : (count >= 6 ? 22 : 26);
 
       playerList.forEach((p, idx) => {
-        p.edgeIndex = arena.edges.indexOf(goalEdges[idx]);
+        if (goalEdges[idx]) {
+          p.edgeIndex = arena.edges.indexOf(goalEdges[idx]);
+        }
         p.radius = malletRadius;
-        if (gameState === 'waiting') {
+        if (gameState === 'waiting' || resetPositions) {
           const edge = arena.edges[p.edgeIndex];
-          const initOffset = Math.min(malletRadius + 20, edge.maxZoneDepth * 0.5);
-          p.x = edge.mx + edge.nx * initOffset;
-          p.y = edge.my + edge.ny * initOffset;
+          if (edge) {
+            const initOffset = Math.min(malletRadius + 20, edge.maxZoneDepth * 0.5);
+            p.x = edge.mx + edge.nx * initOffset;
+            p.y = edge.my + edge.ny * initOffset;
+            p.vx = 0;
+            p.vy = 0;
+          }
         }
       });
     }
-    window.addEventListener('resize', buildArena);
-    buildArena();
+    window.addEventListener('resize', () => buildArena(false));
+    buildArena(true);
 
     function clampMalletToZone(p, x, y) {
       let nx = x;
@@ -306,21 +319,18 @@
       return { x: nx, y: ny };
     }
 
-    // CPUの思考・移動処理
     function updateCpuAI(alivePlayers) {
       alivePlayers.forEach(p => {
         if (!p.isCpu) return;
         const edge = arena.edges[p.edgeIndex];
         if (!edge) return;
 
-        // 自分のゴールに最も脅威となるパックを探す
         let targetPuck = null;
         let bestScore = Infinity;
 
         pucks.forEach(puck => {
           const distToGoal = (puck.x - edge.v1.x) * edge.nx + (puck.y - edge.v1.y) * edge.ny;
           const approaching = (puck.vx * edge.nx + puck.vy * edge.ny) < 0;
-          // ゴールに近づいてきているパックを最優先
           const score = approaching ? distToGoal * 0.5 : distToGoal + 300;
           if (score < bestScore) {
             bestScore = score;
@@ -337,7 +347,6 @@
           const maxAlong = edge.len * Math.min(0.9, GOAL_END + 0.05);
           targetAlong = Math.max(minAlong, Math.min(maxAlong, along));
 
-          // パックが自陣エリア付近に来たら少し前に出て打ち返す
           const distToGoal = (targetPuck.x - edge.v1.x) * edge.nx + (targetPuck.y - edge.v1.y) * edge.ny;
           if (distToGoal < edge.maxZoneDepth * 1.15) {
             targetDepth = Math.min(edge.maxZoneDepth - p.radius, Math.max(p.radius + 14, distToGoal - 8));
@@ -350,7 +359,6 @@
         const dx = goalTargetX - p.x;
         const dy = goalTargetY - p.y;
         const dist = Math.hypot(dx, dy);
-        // CPUの最大移動速度（人間とバランスが取れるよう調整）
         const cpuMaxSpeed = Math.max(3.5, maxPuckSpeed * 0.45);
 
         let moveX = dx;
@@ -417,7 +425,6 @@
     syncPuckCount();
 
     function startGame() {
-      // 1人だけ接続されていてCPUがまだいなければ自動で1体追加
       const humans = Object.values(players).filter(p => !p.isCpu);
       const cpus = Object.values(players).filter(p => p.isCpu);
       if (humans.length === 1 && cpus.length === 0) {
@@ -430,18 +437,11 @@
         alert('スマホを接続するか、CPUを追加して2人以上にしてください！');
         return;
       }
-      gameState = 'waiting';
-      buildArena();
       playerList.forEach(p => {
         p.life = INITIAL_LIFE;
         p.alive = true;
-        const edge = arena.edges[p.edgeIndex];
-        const initOffset = Math.min(p.radius + 20, edge.maxZoneDepth * 0.5);
-        p.x = edge.mx + edge.nx * initOffset;
-        p.y = edge.my + edge.ny * initOffset;
-        p.vx = 0;
-        p.vy = 0;
       });
+      buildArena(true);
       pucks.forEach(resetPuck);
       gameState = 'playing';
       winnerText = '';
@@ -459,7 +459,6 @@
     });
 
     peer.on('connection', (conn) => {
-      // もし自動追加されたCPUがいて枠がいっぱいならCPUを1体譲る
       if (Object.keys(players).length >= MAX_PLAYERS && autoCpuAdded) {
         removeOneCpuPlayer();
       }
@@ -486,19 +485,15 @@
       const humans = Object.values(players).filter(p => !p.isCpu);
       const cpus = Object.values(players).filter(p => p.isCpu);
 
-      // 最初の1人目が接続された時、CPUが0体なら自動でCPUを1体出して相手がいる状態にする
       if (humans.length === 1 && cpus.length === 0) {
         addCpuPlayer();
         autoCpuAdded = true;
       } else if (humans.length >= 2 && autoCpuAdded && cpus.length === 1 && gameState !== 'playing') {
-        // 2人目の人間が参加したら自動CPUは外して人間同士の対戦にする（必要なら手動で再追加可能）
         removeOneCpuPlayer();
         autoCpuAdded = false;
       }
 
-      if (gameState !== 'playing') {
-        buildArena();
-      }
+      buildArena(true);
       updatePlayerList();
 
       conn.on('open', () => {
@@ -532,9 +527,7 @@
           removeOneCpuPlayer();
           autoCpuAdded = false;
         }
-        if (gameState !== 'playing') {
-          buildArena();
-        }
+        buildArena(true);
         updatePlayerList();
       });
     });
@@ -561,7 +554,6 @@
       const playerList = Object.values(players);
       const alivePlayers = playerList.filter(p => p.alive);
 
-      // CPUの移動更新
       updateCpuAI(alivePlayers);
 
       const edgeOwner = {};
@@ -583,7 +575,6 @@
           puck.vy = (puck.vy / currentSpeed) * minPuckSpeed;
         }
 
-        // 各辺との衝突・ゴール判定
         for (let eIdx = 0; eIdx < arena.edges.length; eIdx++) {
           const edge = arena.edges[eIdx];
           const distToEdge = (puck.x - edge.v1.x) * edge.nx + (puck.y - edge.v1.y) * edge.ny;
@@ -632,7 +623,6 @@
           }
         }
 
-        // マレットとの衝突判定
         alivePlayers.forEach(p => {
           const dx = puck.x - p.x;
           const dy = puck.y - p.y;
@@ -662,7 +652,6 @@
           }
         });
 
-        // パック同士の衝突判定
         for (let j = i + 1; j < pucks.length; j++) {
           const other = pucks[j];
           const dx = other.x - puck.x;
