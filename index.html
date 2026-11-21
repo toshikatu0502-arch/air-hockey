@@ -55,12 +55,12 @@
 
     <div style="display: flex; gap: 6px; width: 100%;">
       <div class="controls" style="flex: 1;">
-        <div class="control-label">パック上限</div>
-        <input type="number" id="puck-speed-input" value="11" min="2" max="30" step="1" onchange="updateSettings()">
+        <div class="control-label">パック速度</div>
+        <input type="number" id="puck-speed-input" value="7" min="1" max="30" step="1" oninput="updateSettings()" onchange="updateSettings()">
       </div>
       <div class="controls" style="flex: 1;">
         <div class="control-label">マレット倍率</div>
-        <input type="number" id="mallet-speed-input" value="1.0" min="0.2" max="4.0" step="0.1" onchange="updateSettings()">
+        <input type="number" id="mallet-speed-input" value="1.0" min="0.2" max="4.0" step="0.1" oninput="updateSettings()" onchange="updateSettings()">
       </div>
     </div>
 
@@ -82,14 +82,17 @@
     let targetPuckCount = 3;
     let autoCpuAdded = false;
 
-    let maxPuckSpeed = 11;
-    let minPuckSpeed = 1.8;
+    // パック速度設定（basePuckSpeedを基準に上限・下限を連動）
+    let basePuckSpeed = 7;
+    let maxPuckSpeed = 12;
+    let minPuckSpeed = 4.5;
     let malletSensitivity = 1.0;
 
-    const GOAL_RATIO = 0.50;
-    const GOAL_START = (1 - GOAL_RATIO) / 2;
-    const GOAL_END = 1 - GOAL_START;
-    const ZONE_DEPTH_RATIO = 0.45;
+    // ゴール開口率
+    let goalRatio = 0.36;
+    let goalStart = (1 - goalRatio) / 2;
+    let goalEnd = 1 - goalStart;
+    const ZONE_DEPTH_RATIO = 0.38;
 
     const INITIAL_LIFE = 5;
     let gameState = 'waiting';
@@ -97,6 +100,12 @@
     let goalFlash = { timer: 0, color: '#fff' };
 
     let arena = { cx: 0, cy: 0, R: 0, vertices: [], edges: [], shapeName: '' };
+
+    function setGoalRatio(ratio) {
+      goalRatio = ratio;
+      goalStart = (1 - goalRatio) / 2;
+      goalEnd = 1 - goalStart;
+    }
 
     function getNextAvailableNum() {
       const usedNums = new Set(Object.values(players).map(p => p.num));
@@ -139,19 +148,17 @@
       return false;
     }
 
-    // CPUの数を変更したときは、試合中であってもコート形状と配置を即座に更新する
     function changeCpuCount(delta) {
       let changed = false;
       if (delta > 0) {
         changed = addCpuPlayer();
-        if (changed) autoCpuAdded = false; // 手動で増やしたら自動管理フラグを解除
+        if (changed) autoCpuAdded = false;
       } else {
         changed = removeOneCpuPlayer();
         if (changed) autoCpuAdded = false;
       }
 
       if (changed) {
-        // コート形状を再構築して全員を正しいゴール辺へ再配置
         buildArena(true);
         if (gameState === 'gameover') {
           gameState = 'waiting';
@@ -182,7 +189,7 @@
       arena.cx = canvas.width / 2;
       arena.cy = canvas.height / 2;
       const minDim = Math.min(canvas.width, canvas.height);
-      arena.R = minDim * 0.44;
+      arena.R = minDim * 0.45;
 
       const playerList = Object.values(players).sort((a, b) => a.num - b.num);
       const count = playerList.length;
@@ -191,8 +198,9 @@
       arena.edges = [];
 
       if (count <= 1) {
+        setGoalRatio(0.36);
         arena.shapeName = '待機中（正方形コート）';
-        const half = minDim * 0.4;
+        const half = minDim * 0.42;
         const v = [
           { x: arena.cx - half, y: arena.cy - half },
           { x: arena.cx + half, y: arena.cy - half },
@@ -207,9 +215,10 @@
           makeEdge(v[3], v[0], false)
         ];
       } else if (count === 2) {
+        setGoalRatio(0.36);
         arena.shapeName = '2人対戦：長方形コート';
-        const halfW = Math.min(canvas.width * 0.45, minDim * 0.62);
-        const halfH = minDim * 0.36;
+        const halfW = Math.min(canvas.width * 0.46, minDim * 0.65);
+        const halfH = minDim * 0.38;
         const v = [
           { x: arena.cx - halfW, y: arena.cy - halfH },
           { x: arena.cx + halfW, y: arena.cy - halfH },
@@ -224,8 +233,13 @@
           makeEdge(v[2], v[3], false)
         ];
       } else if (count === 3) {
+        setGoalRatio(0.28);
         arena.shapeName = '3人対戦：正三角形コート';
-        const r = minDim * 0.48;
+        const rByHeight = (canvas.height - 90) / 1.5;
+        const rByWidth = (canvas.width - 100) / Math.sqrt(3);
+        const r = Math.min(rByHeight, rByWidth);
+        arena.cy = canvas.height / 2 + r * 0.22;
+
         for (let i = 0; i < 3; i++) {
           const angle = -Math.PI / 2 + (i * Math.PI * 2) / 3;
           arena.vertices.push({
@@ -237,9 +251,10 @@
           arena.edges.push(makeEdge(arena.vertices[i], arena.vertices[(i + 1) % 3], true));
         }
       } else if (count === 4) {
+        setGoalRatio(0.30);
         arena.shapeName = '4人対戦：長方形コート';
-        const halfW = Math.min(canvas.width * 0.44, minDim * 0.54);
-        const halfH = minDim * 0.40;
+        const halfW = Math.min(canvas.width * 0.45, minDim * 0.56);
+        const halfH = minDim * 0.42;
         const v = [
           { x: arena.cx - halfW, y: arena.cy - halfH },
           { x: arena.cx + halfW, y: arena.cy - halfH },
@@ -254,6 +269,7 @@
           makeEdge(v[1], v[2], true)
         ];
       } else {
+        setGoalRatio(count <= 6 ? 0.36 : 0.44);
         arena.shapeName = `${count}人対戦：正${count}角形コート`;
         const n = count;
         const startAngle = Math.PI / 2 - Math.PI / n;
@@ -270,7 +286,7 @@
       }
 
       const goalEdges = arena.edges.filter(e => e.isGoalEdge);
-      const malletRadius = count >= 10 ? 18 : (count >= 6 ? 22 : 26);
+      const malletRadius = count >= 10 ? 18 : (count >= 6 ? 22 : 25);
 
       playerList.forEach((p, idx) => {
         if (goalEdges[idx]) {
@@ -339,12 +355,12 @@
         });
 
         let targetAlong = edge.len * 0.5;
-        let targetDepth = Math.min(p.radius + 22, edge.maxZoneDepth * 0.45);
+        let targetDepth = Math.min(p.radius + 20, edge.maxZoneDepth * 0.45);
 
         if (targetPuck) {
           const along = (targetPuck.x - edge.v1.x) * edge.tx + (targetPuck.y - edge.v1.y) * edge.ty;
-          const minAlong = edge.len * Math.max(0.1, GOAL_START - 0.05);
-          const maxAlong = edge.len * Math.min(0.9, GOAL_END + 0.05);
+          const minAlong = edge.len * Math.max(0.1, goalStart - 0.04);
+          const maxAlong = edge.len * Math.min(0.9, goalEnd + 0.04);
           targetAlong = Math.max(minAlong, Math.min(maxAlong, along));
 
           const distToGoal = (targetPuck.x - edge.v1.x) * edge.nx + (targetPuck.y - edge.v1.y) * edge.ny;
@@ -359,7 +375,7 @@
         const dx = goalTargetX - p.x;
         const dy = goalTargetY - p.y;
         const dist = Math.hypot(dx, dy);
-        const cpuMaxSpeed = Math.max(3.5, maxPuckSpeed * 0.45);
+        const cpuMaxSpeed = Math.max(3.5, basePuckSpeed * 0.65);
 
         let moveX = dx;
         let moveY = dy;
@@ -376,40 +392,49 @@
       });
     }
 
+    // パック速度・マレット倍率のリアルタイム更新（既存のパック速度も即座に反映）
     function updateSettings() {
       const puckInput = parseFloat(document.getElementById('puck-speed-input').value);
-      if (!isNaN(puckInput)) {
-        maxPuckSpeed = Math.max(2, Math.min(30, puckInput));
-        document.getElementById('puck-speed-input').value = maxPuckSpeed;
-        minPuckSpeed = Math.max(0.5, maxPuckSpeed * 0.16);
+      if (!isNaN(puckInput) && puckInput >= 1) {
+        const clampedVal = Math.max(1, Math.min(30, puckInput));
+        basePuckSpeed = clampedVal;
+        minPuckSpeed = clampedVal * 0.75; // 最低速度（減速しないよう基準値の75%を維持）
+        maxPuckSpeed = clampedVal * 1.8;  // スマッシュ時の最高速度上限
+
+        // すでに動いているパックのスピードも即座に新しい基準速度へ調整
+        pucks.forEach(puck => {
+          const cur = Math.hypot(puck.vx, puck.vy);
+          if (cur > 0) {
+            puck.vx = (puck.vx / cur) * basePuckSpeed;
+            puck.vy = (puck.vy / cur) * basePuckSpeed;
+          }
+        });
       }
+
       const malletInput = parseFloat(document.getElementById('mallet-speed-input').value);
-      if (!isNaN(malletInput)) {
+      if (!isNaN(malletInput) && malletInput >= 0.2) {
         malletSensitivity = Math.max(0.2, Math.min(4.0, malletInput));
-        document.getElementById('mallet-speed-input').value = malletSensitivity.toFixed(1);
       }
     }
 
     function createPuck() {
       const angle = Math.random() * Math.PI * 2;
-      const speed = minPuckSpeed + (maxPuckSpeed - minPuckSpeed) * 0.25;
       return {
         x: arena.cx + (Math.random() - 0.5) * 40,
         y: arena.cy + (Math.random() - 0.5) * 40,
-        vx: Math.cos(angle) * speed,
-        vy: Math.sin(angle) * speed,
-        radius: 14,
+        vx: Math.cos(angle) * basePuckSpeed,
+        vy: Math.sin(angle) * basePuckSpeed,
+        radius: 13,
         color: '#00ffcc'
       };
     }
 
     function resetPuck(puck) {
       const angle = Math.random() * Math.PI * 2;
-      const speed = minPuckSpeed + (maxPuckSpeed - minPuckSpeed) * 0.25;
       puck.x = arena.cx + (Math.random() - 0.5) * 30;
       puck.y = arena.cy + (Math.random() - 0.5) * 30;
-      puck.vx = Math.cos(angle) * speed;
-      puck.vy = Math.sin(angle) * speed;
+      puck.vx = Math.cos(angle) * basePuckSpeed;
+      puck.vy = Math.sin(angle) * basePuckSpeed;
     }
 
     function syncPuckCount() {
@@ -479,7 +504,7 @@
         y: arena.cy,
         vx: 0,
         vy: 0,
-        radius: 26
+        radius: 25
       };
 
       const humans = Object.values(players).filter(p => !p.isCpu);
@@ -564,8 +589,7 @@
         puck.x += puck.vx;
         puck.y += puck.vy;
 
-        puck.vx *= 0.994;
-        puck.vy *= 0.994;
+        // 摩擦減速はゼロにし、設定された最低〜最高速度の範囲内に収める
         const currentSpeed = Math.hypot(puck.vx, puck.vy);
         if (currentSpeed > maxPuckSpeed) {
           puck.vx = (puck.vx / currentSpeed) * maxPuckSpeed;
@@ -575,6 +599,7 @@
           puck.vy = (puck.vy / currentSpeed) * minPuckSpeed;
         }
 
+        // 壁との反射・ゴール判定（入射角に応じた自動減速調整付き）
         for (let eIdx = 0; eIdx < arena.edges.length; eIdx++) {
           const edge = arena.edges[eIdx];
           const distToEdge = (puck.x - edge.v1.x) * edge.nx + (puck.y - edge.v1.y) * edge.ny;
@@ -582,7 +607,7 @@
           if (distToEdge < puck.radius) {
             const owner = edgeOwner[eIdx];
             const along = (puck.x - edge.v1.x) * edge.tx + (puck.y - edge.v1.y) * edge.ty;
-            const inGoalMouth = along > edge.len * GOAL_START && along < edge.len * GOAL_END;
+            const inGoalMouth = along > edge.len * goalStart && along < edge.len * goalEnd;
 
             if (gameState === 'playing' && owner && inGoalMouth) {
               if (distToEdge < -puck.radius * 0.3) {
@@ -612,17 +637,29 @@
                 break;
               }
             } else {
+              // めり込み補正
               puck.x += edge.nx * (puck.radius - distToEdge);
               puck.y += edge.ny * (puck.radius - distToEdge);
+
               const dot = puck.vx * edge.nx + puck.vy * edge.ny;
               if (dot < 0) {
-                puck.vx -= 2 * dot * edge.nx;
-                puck.vy -= 2 * dot * edge.ny;
+                const spd = Math.hypot(puck.vx, puck.vy);
+                // 入射角の垂直度（0.0 = 平行にカスめた 〜 1.0 = 真っ正面から垂直衝突）
+                const normalImpact = spd > 0 ? Math.abs(dot) / spd : 0;
+
+                // 角度に応じた反発係数：
+                // 斜めに当たった時は 1.0（全く減速しない）
+                // 真っ正面から強くぶつかった時だけ最大15%（0.85）まで自然に衝撃吸収
+                const restitution = 1.0 - (normalImpact * normalImpact) * 0.15;
+
+                puck.vx = (puck.vx - 2 * dot * edge.nx) * restitution;
+                puck.vy = (puck.vy - 2 * dot * edge.ny) * restitution;
               }
             }
           }
         }
 
+        // マレットとの衝突判定
         alivePlayers.forEach(p => {
           const dx = puck.x - p.x;
           const dy = puck.y - p.y;
@@ -640,7 +677,7 @@
             let refVy = dot < 0 ? puck.vy - 2 * dot * ny : puck.vy;
 
             const hitSpeed = Math.hypot(p.vx, p.vy);
-            const minBounce = Math.max(1.2, maxPuckSpeed * 0.22);
+            const minBounce = Math.max(1.2, basePuckSpeed * 0.85);
             const pushSpeed = Math.max(minBounce, hitSpeed * 0.5);
 
             puck.vx = refVx * 0.9 + nx * pushSpeed + p.vx * 0.25;
@@ -652,6 +689,7 @@
           }
         });
 
+        // パック同士の衝突判定
         for (let j = i + 1; j < pucks.length; j++) {
           const other = pucks[j];
           const dx = other.x - puck.x;
@@ -751,7 +789,7 @@
       drawDefenseZones(edgeOwner);
 
       ctx.beginPath();
-      ctx.arc(arena.cx, arena.cy, Math.min(canvas.width, canvas.height) * 0.08, 0, Math.PI * 2);
+      ctx.arc(arena.cx, arena.cy, Math.min(canvas.width, canvas.height) * 0.07, 0, Math.PI * 2);
       ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
       ctx.lineWidth = 2;
       ctx.stroke();
@@ -761,10 +799,10 @@
         const owner = edgeOwner[i];
 
         if (owner) {
-          const g1x = edge.v1.x + edge.tx * (edge.len * GOAL_START);
-          const g1y = edge.v1.y + edge.ty * (edge.len * GOAL_START);
-          const g2x = edge.v1.x + edge.tx * (edge.len * GOAL_END);
-          const g2y = edge.v1.y + edge.ty * (edge.len * GOAL_END);
+          const g1x = edge.v1.x + edge.tx * (edge.len * goalStart);
+          const g1y = edge.v1.y + edge.ty * (edge.len * goalStart);
+          const g2x = edge.v1.x + edge.tx * (edge.len * goalEnd);
+          const g2y = edge.v1.y + edge.ty * (edge.len * goalEnd);
 
           ctx.beginPath();
           ctx.moveTo(g1x, g1y);
