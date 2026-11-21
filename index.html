@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <title>最大15人マルチパック・エアホッケー（CPU対戦対応）</title>
+  <title>最大15人マルチパック・エアホッケー（アイテム＆CPU対戦対応）</title>
   <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
   <style>
@@ -10,8 +10,9 @@
     #sidebar { width: 250px; padding: 12px; background: #1e1e24; display: flex; flex-direction: column; align-items: center; z-index: 10; box-sizing: border-box; }
     #qrcode { background: #fff; padding: 6px; border-radius: 8px; margin: 4px 0; }
     canvas { flex: 1; background: #0a0a0f; display: block; }
-    .player-badge { width: 100%; padding: 5px 10px; margin: 2px 0; border-radius: 4px; font-weight: bold; color: #000; box-sizing: border-box; display: flex; justify-content: space-between; align-items: center; font-size: 13px; }
+    .player-badge { width: 100%; padding: 5px 8px; margin: 2px 0; border-radius: 4px; font-weight: bold; color: #000; box-sizing: border-box; display: flex; justify-content: space-between; align-items: center; font-size: 12px; }
     .player-badge.eliminated { opacity: 0.35; text-decoration: line-through; }
+    .buff-tag { background: rgba(0,0,0,0.8); color: #fff; padding: 1px 5px; border-radius: 3px; font-size: 10px; margin-left: 3px; }
     .controls { width: 100%; background: #2a2a35; padding: 7px 10px; border-radius: 8px; margin: 3px 0; text-align: center; box-sizing: border-box; }
     .control-label { font-size: 11px; color: #ccc; margin-bottom: 3px; }
     .btn-group { display: flex; justify-content: center; align-items: center; gap: 12px; }
@@ -76,6 +77,7 @@
       '#FF9500', '#5AC8FA', '#FF2D55', '#A2845E', '#00C7BE',
       '#30B0C7', '#32ADE6', '#5856D6', '#FF6482', '#FFD60A'
     ];
+    const DEFAULT_PUCK_COLOR = '#00ffcc';
     const MAX_PLAYERS = 15;
     const players = {};
     const pucks = [];
@@ -88,12 +90,22 @@
     let malletSensitivity = 1.0;
 
     // Aボタン・ダッシュ設定
-    const DASH_DURATION_MS = 260;  // 一瞬速くなる時間（約0.26秒）
-    const DASH_SPEED_MULT = 2.4;   // ダッシュ中の移動速度倍率
+    const DASH_DURATION_MS = 260;
+    const DASH_SPEED_MULT = 2.4;
 
-    let goalRatio = 0.36;
-    let goalStart = (1 - goalRatio) / 2;
-    let goalEnd = 1 - goalStart;
+    // 特殊アイテム設定（一定時間で自動解除）
+    const ITEM_DURATION_MS = 10000;      // 効果の持続時間（10秒）
+    const ITEM_SPAWN_INTERVAL_MS = 7000; // アイテム出現間隔（7秒）
+    const ITEM_TYPES = [
+      { type: 'big',   label: 'BIG',   color: '#FF9500', desc: 'マレット巨大化！(10秒)' },
+      { type: 'guard', label: 'GUARD', color: '#5AC8FA', desc: 'ゴール幅縮小！(10秒)' },
+      { type: 'power', label: 'POW',   color: '#FF2D55', desc: '常時高速スマッシュ！(10秒)' }
+    ];
+    const items = [];
+    let lastItemSpawnTime = 0;
+    let itemBanner = { text: '', color: '#fff', timer: 0 };
+
+    let baseGoalRatio = 0.36;
     const ZONE_DEPTH_RATIO = 0.42;
 
     const INITIAL_LIFE = 5;
@@ -103,10 +115,18 @@
 
     let arena = { cx: 0, cy: 0, rx: 0, ry: 0, vertices: [], edges: [], shapeName: '' };
 
-    function setGoalRatio(ratio) {
-      goalRatio = ratio;
-      goalStart = (1 - goalRatio) / 2;
-      goalEnd = 1 - goalStart;
+    function getPlayerGoalRange(player) {
+      const now = Date.now();
+      const isNarrow = player && now < player.narrowGoalUntil;
+      const ratio = isNarrow ? baseGoalRatio * 0.5 : baseGoalRatio;
+      const start = (1 - ratio) / 2;
+      return { start, end: 1 - start, ratio };
+    }
+
+    function getPlayerCurrentRadius(player) {
+      const now = Date.now();
+      const mult = (now < player.bigMalletUntil) ? 1.55 : 1.0;
+      return player.baseRadius * mult;
     }
 
     function getNextAvailableNum() {
@@ -136,8 +156,11 @@
         y: arena.cy,
         vx: 0,
         vy: 0,
-        radius: 26,
-        dashUntil: 0
+        baseRadius: 26,
+        dashUntil: 0,
+        bigMalletUntil: 0,
+        narrowGoalUntil: 0,
+        powerShotUntil: 0
       };
       return true;
     }
@@ -205,7 +228,7 @@
       arena.edges = [];
 
       if (count <= 1) {
-        setGoalRatio(0.36);
+        baseGoalRatio = 0.36;
         arena.shapeName = '待機中（ワイド四角形コート）';
         const halfW = arena.rx;
         const halfH = arena.ry;
@@ -223,7 +246,7 @@
           makeEdge(v[3], v[0], false)
         ];
       } else if (count === 2) {
-        setGoalRatio(0.38);
+        baseGoalRatio = 0.38;
         arena.shapeName = '2人対戦：ワイド四角形コート';
         const halfW = arena.rx;
         const halfH = arena.ry;
@@ -241,7 +264,7 @@
           makeEdge(v[2], v[3], false)
         ];
       } else if (count === 3) {
-        setGoalRatio(0.34);
+        baseGoalRatio = 0.34;
         arena.shapeName = '3人対戦：ワイド四角形コート（3辺ゴール）';
         const halfW = arena.rx;
         const halfH = arena.ry;
@@ -259,7 +282,7 @@
           makeEdge(v[0], v[1], false)
         ];
       } else if (count === 4) {
-        setGoalRatio(0.34);
+        baseGoalRatio = 0.34;
         arena.shapeName = '4人対戦：ワイド四角形コート（4辺ゴール）';
         const halfW = arena.rx;
         const halfH = arena.ry;
@@ -277,7 +300,7 @@
           makeEdge(v[1], v[2], true)
         ];
       } else {
-        setGoalRatio(count <= 6 ? 0.38 : 0.45);
+        baseGoalRatio = count <= 6 ? 0.38 : 0.45;
         arena.shapeName = `${count}人対戦：ワイド${count}角形コート`;
         const n = count;
         const startAngle = Math.PI / 2 - Math.PI / n;
@@ -300,7 +323,7 @@
         if (goalEdges[idx]) {
           p.edgeIndex = arena.edges.indexOf(goalEdges[idx]);
         }
-        p.radius = malletRadius;
+        p.baseRadius = malletRadius;
         if (gameState === 'waiting' || resetPositions) {
           const edge = arena.edges[p.edgeIndex];
           if (edge) {
@@ -319,20 +342,21 @@
     function clampMalletToZone(p, x, y) {
       let nx = x;
       let ny = y;
+      const curRadius = getPlayerCurrentRadius(p);
 
       for (let i = 0; i < arena.edges.length; i++) {
         const edge = arena.edges[i];
         const distToEdge = (nx - edge.v1.x) * edge.nx + (ny - edge.v1.y) * edge.ny;
-        if (distToEdge < p.radius) {
-          nx += edge.nx * (p.radius - distToEdge);
-          ny += edge.ny * (p.radius - distToEdge);
+        if (distToEdge < curRadius) {
+          nx += edge.nx * (curRadius - distToEdge);
+          ny += edge.ny * (curRadius - distToEdge);
         }
       }
 
       const myEdge = arena.edges[p.edgeIndex];
       if (myEdge) {
         const distFromMyGoal = (nx - myEdge.v1.x) * myEdge.nx + (ny - myEdge.v1.y) * myEdge.ny;
-        const limitDepth = Math.max(p.radius + 8, myEdge.maxZoneDepth - p.radius);
+        const limitDepth = Math.max(curRadius + 8, myEdge.maxZoneDepth - curRadius);
         if (distFromMyGoal > limitDepth) {
           const excess = distFromMyGoal - limitDepth;
           nx -= myEdge.nx * excess;
@@ -348,6 +372,8 @@
         if (!p.isCpu) return;
         const edge = arena.edges[p.edgeIndex];
         if (!edge) return;
+        const curRadius = getPlayerCurrentRadius(p);
+        const goalRange = getPlayerGoalRange(p);
 
         let targetPuck = null;
         let bestScore = Infinity;
@@ -363,17 +389,17 @@
         });
 
         let targetAlong = edge.len * 0.5;
-        let targetDepth = Math.min(p.radius + 20, edge.maxZoneDepth * 0.45);
+        let targetDepth = Math.min(curRadius + 20, edge.maxZoneDepth * 0.45);
 
         if (targetPuck) {
           const along = (targetPuck.x - edge.v1.x) * edge.tx + (targetPuck.y - edge.v1.y) * edge.ty;
-          const minAlong = edge.len * Math.max(0.1, goalStart - 0.04);
-          const maxAlong = edge.len * Math.min(0.9, goalEnd + 0.04);
+          const minAlong = edge.len * Math.max(0.08, goalRange.start - 0.04);
+          const maxAlong = edge.len * Math.min(0.92, goalRange.end + 0.04);
           targetAlong = Math.max(minAlong, Math.min(maxAlong, along));
 
           const distToGoal = (targetPuck.x - edge.v1.x) * edge.nx + (targetPuck.y - edge.v1.y) * edge.ny;
           if (distToGoal < edge.maxZoneDepth * 1.15) {
-            targetDepth = Math.min(edge.maxZoneDepth - p.radius, Math.max(p.radius + 14, distToGoal - 8));
+            targetDepth = Math.min(edge.maxZoneDepth - curRadius, Math.max(curRadius + 14, distToGoal - 8));
           }
         }
 
@@ -431,7 +457,8 @@
         vx: Math.cos(angle) * basePuckSpeed,
         vy: Math.sin(angle) * basePuckSpeed,
         radius: 13,
-        color: '#00ffcc'
+        color: DEFAULT_PUCK_COLOR,
+        ownerId: null
       };
     }
 
@@ -441,6 +468,8 @@
       puck.y = arena.cy + (Math.random() - 0.5) * 30;
       puck.vx = Math.cos(angle) * basePuckSpeed;
       puck.vy = Math.sin(angle) * basePuckSpeed;
+      puck.color = DEFAULT_PUCK_COLOR;
+      puck.ownerId = null;
     }
 
     function syncPuckCount() {
@@ -454,6 +483,55 @@
       syncPuckCount();
     }
     syncPuckCount();
+
+    // 特殊アイテム生成（初期速度を持たせて漂うように出現）
+    function spawnItem() {
+      if (items.length >= 2) return;
+      const spec = ITEM_TYPES[Math.floor(Math.random() * ITEM_TYPES.length)];
+      const angle = Math.random() * Math.PI * 2;
+      const dist = Math.random() * Math.min(arena.rx, arena.ry) * 0.25;
+      const driftAngle = Math.random() * Math.PI * 2;
+      const driftSpeed = 1.2;
+
+      items.push({
+        type: spec.type,
+        label: spec.label,
+        color: spec.color,
+        desc: spec.desc,
+        x: arena.cx + Math.cos(angle) * dist,
+        y: arena.cy + Math.sin(angle) * dist,
+        vx: Math.cos(driftAngle) * driftSpeed,
+        vy: Math.sin(driftAngle) * driftSpeed,
+        radius: 22,
+        spawnTime: Date.now()
+      });
+    }
+
+    function applyItemEffect(player, item) {
+      const now = Date.now();
+      if (item.type === 'big') {
+        player.bigMalletUntil = now + ITEM_DURATION_MS;
+        const clamped = clampMalletToZone(player, player.x, player.y);
+        player.x = clamped.x;
+        player.y = clamped.y;
+      } else if (item.type === 'guard') {
+        player.narrowGoalUntil = now + ITEM_DURATION_MS;
+      } else if (item.type === 'power') {
+        player.powerShotUntil = now + ITEM_DURATION_MS;
+      }
+
+      const nameTag = player.isCpu ? `CPU(P${player.num})` : `Player ${player.num}`;
+      itemBanner = {
+        text: `${nameTag} : ${item.desc}`,
+        color: item.color,
+        timer: 110
+      };
+
+      if (player.conn && player.conn.open) {
+        player.conn.send({ type: 'hit' });
+      }
+      updatePlayerList();
+    }
 
     function startGame() {
       const humans = Object.values(players).filter(p => !p.isCpu);
@@ -472,7 +550,12 @@
         p.life = INITIAL_LIFE;
         p.alive = true;
         p.dashUntil = 0;
+        p.bigMalletUntil = 0;
+        p.narrowGoalUntil = 0;
+        p.powerShotUntil = 0;
       });
+      items.length = 0;
+      lastItemSpawnTime = Date.now();
       buildArena(true);
       pucks.forEach(resetPuck);
       gameState = 'playing';
@@ -511,8 +594,11 @@
         y: arena.cy,
         vx: 0,
         vy: 0,
-        radius: 25,
-        dashUntil: 0
+        baseRadius: 25,
+        dashUntil: 0,
+        bigMalletUntil: 0,
+        narrowGoalUntil: 0,
+        powerShotUntil: 0
       };
 
       const humans = Object.values(players).filter(p => !p.isCpu);
@@ -538,7 +624,6 @@
         if (!p || !p.alive) return;
 
         if (data.type === 'dash') {
-          // Aボタン押下：一瞬だけ移動速度ブースト状態にする
           p.dashUntil = Date.now() + DASH_DURATION_MS;
         } else if (data.type === 'move') {
           const isDashing = Date.now() < p.dashUntil;
@@ -573,6 +658,7 @@
     function updatePlayerList() {
       const list = document.getElementById('player-list');
       list.innerHTML = '';
+      const now = Date.now();
       const sorted = Object.values(players).sort((a, b) => a.num - b.num);
       const cpuCount = sorted.filter(p => p.isCpu).length;
       document.getElementById('cpu-count').innerText = cpuCount;
@@ -582,15 +668,77 @@
         div.className = 'player-badge' + (p.alive ? '' : ' eliminated');
         div.style.background = p.color;
         const hearts = p.alive ? '♥'.repeat(p.life) : 'OUT';
-        const nameTag = p.isCpu ? `CPU (P${p.num})` : `Player ${p.num}`;
-        div.innerHTML = `<span>${nameTag}</span><span>${hearts}</span>`;
+        const nameTag = p.isCpu ? `CPU(P${p.num})` : `P${p.num}`;
+
+        let buffs = '';
+        if (p.alive) {
+          if (now < p.bigMalletUntil) {
+            const sec = Math.ceil((p.bigMalletUntil - now) / 1000);
+            buffs += `<span class="buff-tag">BIG ${sec}s</span>`;
+          }
+          if (now < p.narrowGoalUntil) {
+            const sec = Math.ceil((p.narrowGoalUntil - now) / 1000);
+            buffs += `<span class="buff-tag">GUARD ${sec}s</span>`;
+          }
+          if (now < p.powerShotUntil) {
+            const sec = Math.ceil((p.powerShotUntil - now) / 1000);
+            buffs += `<span class="buff-tag">POW ${sec}s</span>`;
+          }
+        }
+
+        div.innerHTML = `<span>${nameTag}${buffs}</span><span>${hearts}</span>`;
         list.appendChild(div);
       });
     }
 
+    let lastBuffRefresh = 0;
+
     function updatePhysics() {
+      const now = Date.now();
       const playerList = Object.values(players);
       const alivePlayers = playerList.filter(p => p.alive);
+
+      // 試合中は定期的にアイテムを出現させる
+      if (gameState === 'playing' && now - lastItemSpawnTime > ITEM_SPAWN_INTERVAL_MS) {
+        spawnItem();
+        lastItemSpawnTime = now;
+      }
+
+      // バフ期限切れ時の位置補正＆残り秒数バッジの定期更新（0.5秒ごと）
+      if (now - lastBuffRefresh > 500) {
+        alivePlayers.forEach(p => {
+          const clamped = clampMalletToZone(p, p.x, p.y);
+          p.x = clamped.x;
+          p.y = clamped.y;
+        });
+        updatePlayerList();
+        lastBuffRefresh = now;
+      }
+
+      // アイテム自体の移動と壁反射の更新（パックに弾かれて動く）
+      for (let k = 0; k < items.length; k++) {
+        const item = items[k];
+        item.x += item.vx;
+        item.y += item.vy;
+        // 滑らかに減速しつつ漂う
+        item.vx *= 0.985;
+        item.vy *= 0.985;
+
+        // コートの全辺（ゴール含む）を壁として跳ね返り、外へは出ない
+        for (let eIdx = 0; eIdx < arena.edges.length; eIdx++) {
+          const edge = arena.edges[eIdx];
+          const distToEdge = (item.x - edge.v1.x) * edge.nx + (item.y - edge.v1.y) * edge.ny;
+          if (distToEdge < item.radius + 10) {
+            item.x += edge.nx * (item.radius + 10 - distToEdge);
+            item.y += edge.ny * (item.radius + 10 - distToEdge);
+            const dot = item.vx * edge.nx + item.vy * edge.ny;
+            if (dot < 0) {
+              item.vx -= 2 * dot * edge.nx;
+              item.vy -= 2 * dot * edge.ny;
+            }
+          }
+        }
+      }
 
       updateCpuAI(alivePlayers);
 
@@ -611,14 +759,55 @@
           puck.vy = (puck.vy / currentSpeed) * minPuckSpeed;
         }
 
+        // アイテムとの衝突判定（パックに当たるとアイテムが弾かれ、所有者付きなら効果発動）
+        for (let k = items.length - 1; k >= 0; k--) {
+          const item = items[k];
+          const dx = item.x - puck.x;
+          const dy = item.y - puck.y;
+          const distToItem = Math.hypot(dx, dy);
+          const minDist = puck.radius + item.radius;
+
+          if (distToItem < minDist && distToItem > 0) {
+            const nx = dx / distToItem;
+            const ny = dy / distToItem;
+            const overlap = minDist - distToItem;
+
+            // めり込み解消
+            puck.x -= nx * (overlap * 0.5);
+            puck.y -= ny * (overlap * 0.5);
+            item.x += nx * (overlap * 0.5);
+            item.y += ny * (overlap * 0.5);
+
+            // パックとアイテムの弾性衝突（アイテムが大きく弾き飛ばされる）
+            const rvx = puck.vx - item.vx;
+            const rvy = puck.vy - item.vy;
+            const velAlongNormal = rvx * nx + rvy * ny;
+            if (velAlongNormal > 0) {
+              puck.vx -= velAlongNormal * nx * 0.85;
+              puck.vy -= velAlongNormal * ny * 0.85;
+              item.vx += velAlongNormal * nx * 1.15;
+              item.vy += velAlongNormal * ny * 1.15;
+            }
+
+            // 自分の色のパック（所有者あり）なら一定時間の効果を獲得して消滅
+            const owner = puck.ownerId ? players[puck.ownerId] : null;
+            if (owner && owner.alive) {
+              applyItemEffect(owner, item);
+              items.splice(k, 1);
+            }
+          }
+        }
+
+        // 壁との反射・ゴール判定
         for (let eIdx = 0; eIdx < arena.edges.length; eIdx++) {
           const edge = arena.edges[eIdx];
           const distToEdge = (puck.x - edge.v1.x) * edge.nx + (puck.y - edge.v1.y) * edge.ny;
 
           if (distToEdge < puck.radius) {
             const owner = edgeOwner[eIdx];
+            const goalRange = getPlayerGoalRange(owner);
             const along = (puck.x - edge.v1.x) * edge.tx + (puck.y - edge.v1.y) * edge.ty;
-            const inGoalMouth = along > edge.len * goalStart && along < edge.len * goalEnd;
+            const inGoalMouth = along > edge.len * goalRange.start && along < edge.len * goalRange.end;
 
             if (gameState === 'playing' && owner && inGoalMouth) {
               if (distToEdge < -puck.radius * 0.3) {
@@ -664,11 +853,13 @@
           }
         }
 
+        // マレットとの衝突判定
         alivePlayers.forEach(p => {
+          const curRadius = getPlayerCurrentRadius(p);
           const dx = puck.x - p.x;
           const dy = puck.y - p.y;
           const dist = Math.hypot(dx, dy);
-          const minDist = puck.radius + p.radius;
+          const minDist = puck.radius + curRadius;
 
           if (dist < minDist && dist > 0) {
             const nx = dx / dist;
@@ -676,16 +867,26 @@
             puck.x = p.x + nx * (minDist + 1);
             puck.y = p.y + ny * (minDist + 1);
 
-            const dot = puck.vx * nx + puck.vy * ny;
-            let refVx = dot < 0 ? puck.vx - 2 * dot * nx : puck.vx;
-            let refVy = dot < 0 ? puck.vy - 2 * dot * ny : puck.vy;
+            const isPowerActive = now < p.powerShotUntil;
 
-            const hitSpeed = Math.hypot(p.vx, p.vy);
-            const minBounce = Math.max(1.2, basePuckSpeed * 0.85);
-            const pushSpeed = Math.max(minBounce, hitSpeed * 0.55);
+            if (isPowerActive) {
+              puck.vx = nx * maxPuckSpeed;
+              puck.vy = ny * maxPuckSpeed;
+            } else {
+              const dot = puck.vx * nx + puck.vy * ny;
+              let refVx = dot < 0 ? puck.vx - 2 * dot * nx : puck.vx;
+              let refVy = dot < 0 ? puck.vy - 2 * dot * ny : puck.vy;
 
-            puck.vx = refVx * 0.9 + nx * pushSpeed + p.vx * 0.28;
-            puck.vy = refVy * 0.9 + ny * pushSpeed + p.vy * 0.28;
+              const hitSpeed = Math.hypot(p.vx, p.vy);
+              const minBounce = Math.max(1.2, basePuckSpeed * 0.85);
+              const pushSpeed = Math.max(minBounce, hitSpeed * 0.55);
+
+              puck.vx = refVx * 0.9 + nx * pushSpeed + p.vx * 0.28;
+              puck.vy = refVy * 0.9 + ny * pushSpeed + p.vy * 0.28;
+            }
+
+            puck.color = p.color;
+            puck.ownerId = p.id;
 
             if (p.conn && p.conn.open) {
               p.conn.send({ type: 'hit' });
@@ -693,6 +894,7 @@
           }
         });
 
+        // パック同士の衝突判定
         for (let j = i + 1; j < pucks.length; j++) {
           const other = pucks[j];
           const dx = other.x - puck.x;
@@ -769,6 +971,7 @@
 
     function loop() {
       updatePhysics();
+      const now = Date.now();
 
       ctx.fillStyle = 'rgba(10, 10, 15, 0.4)';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -786,6 +989,16 @@
       ctx.textAlign = 'left';
       ctx.fillText(arena.shapeName, 16, 26);
 
+      if (itemBanner.timer > 0) {
+        ctx.fillStyle = itemBanner.color;
+        ctx.globalAlpha = Math.min(1, itemBanner.timer / 20);
+        ctx.font = 'bold 18px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(`★ ${itemBanner.text} ★`, arena.cx, 28);
+        ctx.globalAlpha = 1.0;
+        itemBanner.timer--;
+      }
+
       const edgeOwner = {};
       Object.values(players).filter(p => p.alive).forEach(p => { edgeOwner[p.edgeIndex] = p; });
 
@@ -797,15 +1010,54 @@
       ctx.lineWidth = 2;
       ctx.stroke();
 
+      // 特殊アイテムの描画
+      items.forEach(item => {
+        const pulse = 1 + Math.sin(now * 0.008) * 0.1;
+        const r = item.radius * pulse;
+
+        ctx.save();
+        ctx.translate(item.x, item.y);
+        ctx.rotate(now * 0.002);
+
+        ctx.beginPath();
+        for (let i = 0; i < 6; i++) {
+          const ang = (i * Math.PI) / 3;
+          const px = Math.cos(ang) * r;
+          const py = Math.sin(ang) * r;
+          if (i === 0) ctx.moveTo(px, py);
+          else ctx.lineTo(px, py);
+        }
+        ctx.closePath();
+        ctx.fillStyle = item.color;
+        ctx.globalAlpha = 0.25;
+        ctx.fill();
+        ctx.globalAlpha = 1.0;
+        ctx.lineWidth = 3;
+        ctx.strokeStyle = item.color;
+        ctx.shadowBlur = 14;
+        ctx.shadowColor = item.color;
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+        ctx.restore();
+
+        ctx.fillStyle = '#fff';
+        ctx.font = 'bold 11px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(item.label, item.x, item.y);
+      });
+
+      // 壁とゴールの描画（残り3秒を切ると点滅して終了間近を通知）
       for (let i = 0; i < arena.edges.length; i++) {
         const edge = arena.edges[i];
         const owner = edgeOwner[i];
 
         if (owner) {
-          const g1x = edge.v1.x + edge.tx * (edge.len * goalStart);
-          const g1y = edge.v1.y + edge.ty * (edge.len * goalStart);
-          const g2x = edge.v1.x + edge.tx * (edge.len * goalEnd);
-          const g2y = edge.v1.y + edge.ty * (edge.len * goalEnd);
+          const goalRange = getPlayerGoalRange(owner);
+          const g1x = edge.v1.x + edge.tx * (edge.len * goalRange.start);
+          const g1y = edge.v1.y + edge.ty * (edge.len * goalRange.start);
+          const g2x = edge.v1.x + edge.tx * (edge.len * goalRange.end);
+          const g2y = edge.v1.y + edge.ty * (edge.len * goalRange.end);
 
           ctx.beginPath();
           ctx.moveTo(g1x, g1y);
@@ -821,7 +1073,10 @@
           ctx.lineTo(g1x, g1y);
           ctx.moveTo(g2x, g2y);
           ctx.lineTo(edge.v2.x, edge.v2.y);
-          ctx.strokeStyle = '#fff';
+
+          const guardRem = owner.narrowGoalUntil - now;
+          const isGuardWarning = guardRem > 0 && guardRem < 3000 && Math.floor(now / 150) % 2 === 0;
+          ctx.strokeStyle = guardRem > 0 ? (isGuardWarning ? '#fff' : '#5AC8FA') : '#fff';
           ctx.lineWidth = 6;
           ctx.stroke();
 
@@ -843,44 +1098,51 @@
         }
       }
 
+      // パック描画
       pucks.forEach(puck => {
         ctx.beginPath();
         ctx.arc(puck.x, puck.y, puck.radius, 0, Math.PI * 2);
         ctx.fillStyle = puck.color;
-        ctx.shadowBlur = 14;
+        ctx.shadowBlur = 16;
         ctx.shadowColor = puck.color;
         ctx.fill();
         ctx.shadowBlur = 0;
 
         ctx.beginPath();
-        ctx.arc(puck.x, puck.y, puck.radius * 0.5, 0, Math.PI * 2);
+        ctx.arc(puck.x, puck.y, puck.radius * 0.45, 0, Math.PI * 2);
         ctx.fillStyle = '#fff';
         ctx.fill();
       });
 
-      const now = Date.now();
+      // マレット描画（残り3秒を切るとリングが点滅）
       Object.values(players).filter(p => p.alive).forEach(p => {
+        const curRadius = getPlayerCurrentRadius(p);
         const isDashing = now < p.dashUntil;
+        const isPower = now < p.powerShotUntil;
+        const isBig = now < p.bigMalletUntil;
 
-        // ダッシュ中は外周に白いオーラリングを描画
-        if (isDashing) {
+        const maxBuffRem = Math.max(p.powerShotUntil - now, p.bigMalletUntil - now);
+        const isExpiring = maxBuffRem > 0 && maxBuffRem < 3000;
+        const blinkHide = isExpiring && Math.floor(now / 150) % 2 === 0;
+
+        if ((isDashing || isPower || isBig) && !blinkHide) {
           ctx.beginPath();
-          ctx.arc(p.x, p.y, p.radius + 7, 0, Math.PI * 2);
-          ctx.strokeStyle = '#ffffff';
+          ctx.arc(p.x, p.y, curRadius + 7, 0, Math.PI * 2);
+          ctx.strokeStyle = isPower ? '#FF2D55' : (isBig ? '#FF9500' : '#ffffff');
           ctx.lineWidth = 3;
           ctx.stroke();
         }
 
         ctx.beginPath();
-        ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+        ctx.arc(p.x, p.y, curRadius, 0, Math.PI * 2);
         ctx.fillStyle = p.color;
-        ctx.shadowBlur = isDashing ? 24 : 12;
-        ctx.shadowColor = isDashing ? '#ffffff' : p.color;
+        ctx.shadowBlur = (isDashing || isPower || isBig) ? 22 : 12;
+        ctx.shadowColor = isPower ? '#FF2D55' : (isDashing ? '#ffffff' : p.color);
         ctx.fill();
         ctx.shadowBlur = 0;
 
         ctx.fillStyle = '#fff';
-        ctx.font = p.radius < 20 ? 'bold 11px sans-serif' : 'bold 13px sans-serif';
+        ctx.font = curRadius < 20 ? 'bold 11px sans-serif' : 'bold 13px sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
         ctx.fillText(p.isCpu ? 'CPU' : p.num, p.x, p.y);
