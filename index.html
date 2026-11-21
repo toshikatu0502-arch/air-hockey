@@ -2,25 +2,25 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <title>最大15人マルチパック・エアホッケー</title>
+  <title>最大15人マルチパック・エアホッケー（CPU対戦対応）</title>
   <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
   <style>
     body { margin: 0; background: #111; color: #fff; font-family: sans-serif; overflow: hidden; display: flex; }
-    #sidebar { width: 260px; padding: 14px; background: #1e1e24; display: flex; flex-direction: column; align-items: center; z-index: 10; box-sizing: border-box; }
-    #qrcode { background: #fff; padding: 6px; border-radius: 8px; margin: 6px 0; }
+    #sidebar { width: 260px; padding: 12px; background: #1e1e24; display: flex; flex-direction: column; align-items: center; z-index: 10; box-sizing: border-box; }
+    #qrcode { background: #fff; padding: 6px; border-radius: 8px; margin: 4px 0; }
     canvas { flex: 1; background: #0a0a0f; display: block; }
     .player-badge { width: 100%; padding: 5px 10px; margin: 2px 0; border-radius: 4px; font-weight: bold; color: #000; box-sizing: border-box; display: flex; justify-content: space-between; align-items: center; font-size: 13px; }
     .player-badge.eliminated { opacity: 0.35; text-decoration: line-through; }
-    .controls { width: 100%; background: #2a2a35; padding: 8px 10px; border-radius: 8px; margin: 4px 0; text-align: center; box-sizing: border-box; }
-    .control-label { font-size: 11px; color: #ccc; margin-bottom: 4px; }
+    .controls { width: 100%; background: #2a2a35; padding: 7px 10px; border-radius: 8px; margin: 3px 0; text-align: center; box-sizing: border-box; }
+    .control-label { font-size: 11px; color: #ccc; margin-bottom: 3px; }
     .btn-group { display: flex; justify-content: center; align-items: center; gap: 12px; }
-    button.adj-btn { background: #007AFF; color: #fff; border: none; border-radius: 6px; width: 28px; height: 28px; font-size: 16px; font-weight: bold; cursor: pointer; }
-    button.main-btn { width: 100%; padding: 10px; background: #34C759; color: #000; border: none; border-radius: 8px; font-size: 15px; font-weight: bold; cursor: pointer; margin: 6px 0; }
+    button.adj-btn { background: #007AFF; color: #fff; border: none; border-radius: 6px; width: 26px; height: 26px; font-size: 16px; font-weight: bold; cursor: pointer; }
+    button.main-btn { width: 100%; padding: 9px; background: #34C759; color: #000; border: none; border-radius: 8px; font-size: 14px; font-weight: bold; cursor: pointer; margin: 5px 0; }
     button:active { opacity: 0.75; }
-    #puck-count { font-size: 16px; font-weight: bold; min-width: 20px; }
+    .count-val { font-size: 15px; font-weight: bold; min-width: 20px; }
     input[type="number"] {
-      width: 70px; padding: 4px; font-size: 14px; font-weight: bold; text-align: center;
+      width: 68px; padding: 4px; font-size: 14px; font-weight: bold; text-align: center;
       background: #14141a; color: #fff; border: 1px solid #555; border-radius: 6px;
     }
     input[type="number"]:focus { outline: none; border-color: #007AFF; }
@@ -28,18 +28,28 @@
 </head>
 <body>
   <div id="sidebar">
-    <h3 style="margin: 0 0 2px 0; font-size: 15px;">スマホで参加（最大15人）</h3>
+    <h3 style="margin: 0 0 2px 0; font-size: 14px;">スマホで参加（最大15人）</h3>
     <div id="qrcode"></div>
     <p id="status" style="font-size: 10px; color: #aaa; margin: 2px 0;">ID発行中...</p>
 
     <button id="start-btn" class="main-btn" onclick="startGame()">ゲーム開始 / リセット</button>
 
-    <div class="controls">
-      <div class="control-label">パックの数（マルチパック）</div>
-      <div class="btn-group">
-        <button class="adj-btn" onclick="changePuckCount(-1)">-</button>
-        <span id="puck-count">3</span>
-        <button class="adj-btn" onclick="changePuckCount(1)">+</button>
+    <div style="display: flex; gap: 6px; width: 100%;">
+      <div class="controls" style="flex: 1;">
+        <div class="control-label">パックの数</div>
+        <div class="btn-group">
+          <button class="adj-btn" onclick="changePuckCount(-1)">-</button>
+          <span id="puck-count" class="count-val">3</span>
+          <button class="adj-btn" onclick="changePuckCount(1)">+</button>
+        </div>
+      </div>
+      <div class="controls" style="flex: 1;">
+        <div class="control-label">CPUの数</div>
+        <div class="btn-group">
+          <button class="adj-btn" onclick="changeCpuCount(-1)">-</button>
+          <span id="cpu-count" class="count-val">0</span>
+          <button class="adj-btn" onclick="changeCpuCount(1)">+</button>
+        </div>
       </div>
     </div>
 
@@ -67,21 +77,19 @@
       '#30B0C7', '#32ADE6', '#5856D6', '#FF6482', '#FFD60A'
     ];
     const MAX_PLAYERS = 15;
-    const players = {};
+    const players = {}; // 人間＋CPUの両方を管理
     const pucks = [];
     let targetPuckCount = 3;
+    let autoCpuAdded = false; // 1人参加時の自動CPU追加フラグ
 
     // 速度・ゴール幅・自陣エリア設定
     let maxPuckSpeed = 11;
     let minPuckSpeed = 1.8;
     let malletSensitivity = 1.0;
 
-    // 辺の長さに対するゴール開口部の割合（0.50 = 50%幅）
     const GOAL_RATIO = 0.50;
     const GOAL_START = (1 - GOAL_RATIO) / 2;
     const GOAL_END = 1 - GOAL_START;
-
-    // ゴール辺からコート中心までの距離に対する「移動可能エリア（自陣）」の割合（0.45 = 中心の少し手前まで）
     const ZONE_DEPTH_RATIO = 0.45;
 
     // ゲーム状態管理
@@ -90,8 +98,61 @@
     let winnerText = '';
     let goalFlash = { timer: 0, color: '#fff' };
 
-    // 可変アリーナパラメータ
     let arena = { cx: 0, cy: 0, R: 0, vertices: [], edges: [], shapeName: '' };
+
+    function getNextAvailableNum() {
+      const usedNums = new Set(Object.values(players).map(p => p.num));
+      for (let i = 1; i <= MAX_PLAYERS; i++) {
+        if (!usedNums.has(i)) return i;
+      }
+      return -1;
+    }
+
+    function addCpuPlayer() {
+      if (Object.keys(players).length >= MAX_PLAYERS) return false;
+      const num = getNextAvailableNum();
+      if (num === -1) return false;
+
+      const id = 'cpu_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6);
+      players[id] = {
+        id: id,
+        conn: null,
+        isCpu: true,
+        num: num,
+        edgeIndex: 0,
+        color: colors[num - 1],
+        life: INITIAL_LIFE,
+        alive: true,
+        x: arena.cx,
+        y: arena.cy,
+        vx: 0,
+        vy: 0,
+        radius: 26,
+        aiPhase: Math.random() * Math.PI * 2
+      };
+      return true;
+    }
+
+    function removeOneCpuPlayer() {
+      const cpus = Object.values(players).filter(p => p.isCpu).sort((a, b) => b.num - a.num);
+      if (cpus.length > 0) {
+        delete players[cpus[0].id];
+        return true;
+      }
+      return false;
+    }
+
+    function changeCpuCount(delta) {
+      if (delta > 0) {
+        addCpuPlayer();
+      } else {
+        removeOneCpuPlayer();
+      }
+      if (gameState !== 'playing') {
+        buildArena();
+      }
+      updatePlayerList();
+    }
 
     function makeEdge(v1, v2, isGoalEdge) {
       const mx = (v1.x + v2.x) / 2;
@@ -103,7 +164,6 @@
       const ty = dy / len;
       const nx = -ty;
       const ny = tx;
-      // 辺からコート中心までの垂直距離を計算（自陣ラインの基準になる）
       const distToCenter = (arena.cx - v1.x) * nx + (arena.cy - v1.y) * ny;
       const maxZoneDepth = distToCenter * ZONE_DEPTH_RATIO;
       return { v1, v2, mx, my, tx, ty, len, nx, ny, isGoalEdge, maxZoneDepth };
@@ -124,7 +184,7 @@
       arena.edges = [];
 
       if (count <= 1) {
-        arena.shapeName = '練習モード（正方形）';
+        arena.shapeName = '待機中（正方形コート）';
         const half = minDim * 0.4;
         const v = [
           { x: arena.cx - half, y: arena.cy - half },
@@ -219,12 +279,10 @@
     window.addEventListener('resize', buildArena);
     buildArena();
 
-    // マレットの座標を「コート内 かつ 自陣エリア内」に制限する関数
     function clampMalletToZone(p, x, y) {
       let nx = x;
       let ny = y;
 
-      // 1. コート外周の壁から出ないように制限
       for (let i = 0; i < arena.edges.length; i++) {
         const edge = arena.edges[i];
         const distToEdge = (nx - edge.v1.x) * edge.nx + (ny - edge.v1.y) * edge.ny;
@@ -234,7 +292,6 @@
         }
       }
 
-      // 2. 自分のゴール辺からの最大前進距離（自陣ライン）を超えないように制限
       const myEdge = arena.edges[p.edgeIndex];
       if (myEdge) {
         const distFromMyGoal = (nx - myEdge.v1.x) * myEdge.nx + (ny - myEdge.v1.y) * myEdge.ny;
@@ -247,6 +304,68 @@
       }
 
       return { x: nx, y: ny };
+    }
+
+    // CPUの思考・移動処理
+    function updateCpuAI(alivePlayers) {
+      alivePlayers.forEach(p => {
+        if (!p.isCpu) return;
+        const edge = arena.edges[p.edgeIndex];
+        if (!edge) return;
+
+        // 自分のゴールに最も脅威となるパックを探す
+        let targetPuck = null;
+        let bestScore = Infinity;
+
+        pucks.forEach(puck => {
+          const distToGoal = (puck.x - edge.v1.x) * edge.nx + (puck.y - edge.v1.y) * edge.ny;
+          const approaching = (puck.vx * edge.nx + puck.vy * edge.ny) < 0;
+          // ゴールに近づいてきているパックを最優先
+          const score = approaching ? distToGoal * 0.5 : distToGoal + 300;
+          if (score < bestScore) {
+            bestScore = score;
+            targetPuck = puck;
+          }
+        });
+
+        let targetAlong = edge.len * 0.5;
+        let targetDepth = Math.min(p.radius + 22, edge.maxZoneDepth * 0.45);
+
+        if (targetPuck) {
+          const along = (targetPuck.x - edge.v1.x) * edge.tx + (targetPuck.y - edge.v1.y) * edge.ty;
+          const minAlong = edge.len * Math.max(0.1, GOAL_START - 0.05);
+          const maxAlong = edge.len * Math.min(0.9, GOAL_END + 0.05);
+          targetAlong = Math.max(minAlong, Math.min(maxAlong, along));
+
+          // パックが自陣エリア付近に来たら少し前に出て打ち返す
+          const distToGoal = (targetPuck.x - edge.v1.x) * edge.nx + (targetPuck.y - edge.v1.y) * edge.ny;
+          if (distToGoal < edge.maxZoneDepth * 1.15) {
+            targetDepth = Math.min(edge.maxZoneDepth - p.radius, Math.max(p.radius + 14, distToGoal - 8));
+          }
+        }
+
+        const goalTargetX = edge.v1.x + edge.tx * targetAlong + edge.nx * targetDepth;
+        const goalTargetY = edge.v1.y + edge.ty * targetAlong + edge.ny * targetDepth;
+
+        const dx = goalTargetX - p.x;
+        const dy = goalTargetY - p.y;
+        const dist = Math.hypot(dx, dy);
+        // CPUの最大移動速度（人間とバランスが取れるよう調整）
+        const cpuMaxSpeed = Math.max(3.5, maxPuckSpeed * 0.45);
+
+        let moveX = dx;
+        let moveY = dy;
+        if (dist > cpuMaxSpeed) {
+          moveX = (dx / dist) * cpuMaxSpeed;
+          moveY = (dy / dist) * cpuMaxSpeed;
+        }
+
+        const clamped = clampMalletToZone(p, p.x + moveX, p.y + moveY);
+        p.vx = clamped.x - p.x;
+        p.vy = clamped.y - p.y;
+        p.x = clamped.x;
+        p.y = clamped.y;
+      });
     }
 
     function updateSettings() {
@@ -298,9 +417,17 @@
     syncPuckCount();
 
     function startGame() {
+      // 1人だけ接続されていてCPUがまだいなければ自動で1体追加
+      const humans = Object.values(players).filter(p => !p.isCpu);
+      const cpus = Object.values(players).filter(p => p.isCpu);
+      if (humans.length === 1 && cpus.length === 0) {
+        addCpuPlayer();
+        autoCpuAdded = true;
+      }
+
       const playerList = Object.values(players).sort((a, b) => a.num - b.num);
-      if (playerList.length === 0) {
-        alert('先にスマホを1台以上接続してください！');
+      if (playerList.length < 2) {
+        alert('スマホを接続するか、CPUを追加して2人以上にしてください！');
         return;
       }
       gameState = 'waiting';
@@ -328,21 +455,22 @@
       document.getElementById('status').innerText = 'ID: ' + id;
       const baseUrl = window.location.href.substring(0, window.location.href.lastIndexOf('/') + 1);
       const joinUrl = `${baseUrl}controller.html?host=${id}`;
-      new QRCode(document.getElementById('qrcode'), { text: joinUrl, width: 125, height: 125 });
+      new QRCode(document.getElementById('qrcode'), { text: joinUrl, width: 120, height: 120 });
     });
 
     peer.on('connection', (conn) => {
-      const usedNums = new Set(Object.values(players).map(p => p.num));
-      let num = -1;
-      for (let i = 1; i <= MAX_PLAYERS; i++) {
-        if (!usedNums.has(i)) { num = i; break; }
+      // もし自動追加されたCPUがいて枠がいっぱいならCPUを1体譲る
+      if (Object.keys(players).length >= MAX_PLAYERS && autoCpuAdded) {
+        removeOneCpuPlayer();
       }
+      const num = getNextAvailableNum();
       if (num === -1) { conn.close(); return; }
 
       const color = colors[num - 1];
       players[conn.peer] = {
         id: conn.peer,
         conn: conn,
+        isCpu: false,
         num: num,
         edgeIndex: 0,
         color: color,
@@ -354,6 +482,19 @@
         vy: 0,
         radius: 26
       };
+
+      const humans = Object.values(players).filter(p => !p.isCpu);
+      const cpus = Object.values(players).filter(p => p.isCpu);
+
+      // 最初の1人目が接続された時、CPUが0体なら自動でCPUを1体出して相手がいる状態にする
+      if (humans.length === 1 && cpus.length === 0) {
+        addCpuPlayer();
+        autoCpuAdded = true;
+      } else if (humans.length >= 2 && autoCpuAdded && cpus.length === 1 && gameState !== 'playing') {
+        // 2人目の人間が参加したら自動CPUは外して人間同士の対戦にする（必要なら手動で再追加可能）
+        removeOneCpuPlayer();
+        autoCpuAdded = false;
+      }
 
       if (gameState !== 'playing') {
         buildArena();
@@ -382,6 +523,15 @@
 
       conn.on('close', () => {
         delete players[conn.peer];
+        const remHumans = Object.values(players).filter(p => !p.isCpu);
+        const remCpus = Object.values(players).filter(p => p.isCpu);
+        if (remHumans.length === 1 && remCpus.length === 0) {
+          addCpuPlayer();
+          autoCpuAdded = true;
+        } else if (remHumans.length === 0 && autoCpuAdded) {
+          removeOneCpuPlayer();
+          autoCpuAdded = false;
+        }
         if (gameState !== 'playing') {
           buildArena();
         }
@@ -392,12 +542,17 @@
     function updatePlayerList() {
       const list = document.getElementById('player-list');
       list.innerHTML = '';
-      Object.values(players).sort((a, b) => a.num - b.num).forEach(p => {
+      const sorted = Object.values(players).sort((a, b) => a.num - b.num);
+      const cpuCount = sorted.filter(p => p.isCpu).length;
+      document.getElementById('cpu-count').innerText = cpuCount;
+
+      sorted.forEach(p => {
         const div = document.createElement('div');
         div.className = 'player-badge' + (p.alive ? '' : ' eliminated');
         div.style.background = p.color;
         const hearts = p.alive ? '♥'.repeat(p.life) : 'OUT';
-        div.innerHTML = `<span>P${p.num}</span><span>${hearts}</span>`;
+        const nameTag = p.isCpu ? `CPU (P${p.num})` : `Player ${p.num}`;
+        div.innerHTML = `<span>${nameTag}</span><span>${hearts}</span>`;
         list.appendChild(div);
       });
     }
@@ -405,6 +560,9 @@
     function updatePhysics() {
       const playerList = Object.values(players);
       const alivePlayers = playerList.filter(p => p.alive);
+
+      // CPUの移動更新
+      updateCpuAI(alivePlayers);
 
       const edgeOwner = {};
       alivePlayers.forEach(p => { edgeOwner[p.edgeIndex] = p; });
@@ -453,9 +611,12 @@
                 const remaining = Object.values(players).filter(p => p.alive);
                 if (Object.keys(players).length >= 2 && remaining.length <= 1) {
                   gameState = 'gameover';
-                  winnerText = remaining.length === 1
-                    ? `WINNER: Player ${remaining[0].num} !`
-                    : 'DRAW!';
+                  if (remaining.length === 1) {
+                    const w = remaining[0];
+                    winnerText = w.isCpu ? `WINNER: CPU (P${w.num}) !` : `WINNER: Player ${w.num} !`;
+                  } else {
+                    winnerText = 'DRAW!';
+                  }
                 }
                 break;
               }
@@ -529,13 +690,13 @@
         }
       }
 
-      playerList.forEach(p => { p.vx *= 0.2; p.vy *= 0.2; });
+      playerList.forEach(p => {
+        if (!p.isCpu) { p.vx *= 0.2; p.vy *= 0.2; }
+      });
     }
 
-    // 多角形クリッピング内で各プレイヤーの自陣エリア（境界線）を描画する関数
     function drawDefenseZones(edgeOwner) {
       ctx.save();
-      // コート全体の多角形でクリッピング（境界線がコートの外にはみ出さないようにする）
       ctx.beginPath();
       arena.vertices.forEach((v, i) => {
         if (i === 0) ctx.moveTo(v.x, v.y);
@@ -550,7 +711,6 @@
         if (!owner) continue;
 
         const depth = edge.maxZoneDepth;
-        // 自陣エリアの薄い背景塗り
         ctx.beginPath();
         ctx.moveTo(edge.v1.x, edge.v1.y);
         ctx.lineTo(edge.v2.x, edge.v2.y);
@@ -562,7 +722,6 @@
         ctx.fill();
         ctx.globalAlpha = 1.0;
 
-        // ここまで前に出られる境界ライン（点線）
         ctx.beginPath();
         ctx.moveTo(edge.v1.x + edge.nx * depth - edge.tx * 200, edge.v1.y + edge.ny * depth - edge.ty * 200);
         ctx.lineTo(edge.v2.x + edge.nx * depth + edge.tx * 200, edge.v2.y + edge.ny * depth + edge.ty * 200);
@@ -600,17 +759,14 @@
       const edgeOwner = {};
       Object.values(players).filter(p => p.alive).forEach(p => { edgeOwner[p.edgeIndex] = p; });
 
-      // 各プレイヤーの移動可能エリア（自陣ゾーン）を描画
       drawDefenseZones(edgeOwner);
 
-      // 中央サークル装飾
       ctx.beginPath();
       ctx.arc(arena.cx, arena.cy, Math.min(canvas.width, canvas.height) * 0.08, 0, Math.PI * 2);
       ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
       ctx.lineWidth = 2;
       ctx.stroke();
 
-      // アリーナの壁とゴールライン描画
       for (let i = 0; i < arena.edges.length; i++) {
         const edge = arena.edges[i];
         const owner = edgeOwner[i];
@@ -621,7 +777,6 @@
           const g2x = edge.v1.x + edge.tx * (edge.len * GOAL_END);
           const g2y = edge.v1.y + edge.ty * (edge.len * GOAL_END);
 
-          // ゴールライン
           ctx.beginPath();
           ctx.moveTo(g1x, g1y);
           ctx.lineTo(g2x, g2y);
@@ -631,7 +786,6 @@
           ctx.stroke();
           ctx.setLineDash([]);
 
-          // 両端のポスト壁
           ctx.beginPath();
           ctx.moveTo(edge.v1.x, edge.v1.y);
           ctx.lineTo(g1x, g1y);
@@ -641,14 +795,14 @@
           ctx.lineWidth = 6;
           ctx.stroke();
 
-          // ゴール外側のラベル
-          const labelX = edge.mx - edge.nx * 24;
-          const labelY = edge.my - edge.ny * 24;
+          const labelX = edge.mx - edge.nx * 26;
+          const labelY = edge.my - edge.ny * 26;
           ctx.fillStyle = owner.color;
           ctx.font = Object.keys(players).length >= 10 ? 'bold 12px sans-serif' : 'bold 14px sans-serif';
           ctx.textAlign = 'center';
           ctx.textBaseline = 'middle';
-          ctx.fillText(`P${owner.num}(${owner.life})`, labelX, labelY);
+          const tag = owner.isCpu ? `CPU(${owner.life})` : `P${owner.num}(${owner.life})`;
+          ctx.fillText(tag, labelX, labelY);
         } else {
           ctx.beginPath();
           ctx.moveTo(edge.v1.x, edge.v1.y);
@@ -659,7 +813,6 @@
         }
       }
 
-      // パック描画
       pucks.forEach(puck => {
         ctx.beginPath();
         ctx.arc(puck.x, puck.y, puck.radius, 0, Math.PI * 2);
@@ -675,7 +828,6 @@
         ctx.fill();
       });
 
-      // マレット描画
       Object.values(players).filter(p => p.alive).forEach(p => {
         ctx.beginPath();
         ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
@@ -686,13 +838,12 @@
         ctx.shadowBlur = 0;
 
         ctx.fillStyle = '#fff';
-        ctx.font = p.radius < 20 ? 'bold 12px sans-serif' : 'bold 14px sans-serif';
+        ctx.font = p.radius < 20 ? 'bold 11px sans-serif' : 'bold 13px sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText(p.num, p.x, p.y);
+        ctx.fillText(p.isCpu ? 'CPU' : p.num, p.x, p.y);
       });
 
-      // オーバーレイ表示
       if (gameState === 'waiting') {
         ctx.fillStyle = 'rgba(255, 255, 255, 0.75)';
         ctx.font = 'bold 18px sans-serif';
@@ -700,9 +851,9 @@
         ctx.fillText('参加者が揃ったら「ゲーム開始」を押してください', arena.cx, arena.cy);
       } else if (gameState === 'gameover') {
         ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-        ctx.fillRect(arena.cx - 200, arena.cy - 45, 400, 90);
+        ctx.fillRect(arena.cx - 210, arena.cy - 45, 420, 90);
         ctx.fillStyle = '#FFCC00';
-        ctx.font = 'bold 30px sans-serif';
+        ctx.font = 'bold 28px sans-serif';
         ctx.textAlign = 'center';
         ctx.fillText(winnerText, arena.cx, arena.cy);
       }
