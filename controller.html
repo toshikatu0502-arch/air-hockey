@@ -36,15 +36,16 @@
           infoEl.innerText = '接続完了！';
         });
 
-        // ホストから色と番号を受け取る
         conn.on('data', (data) => {
           if (data.type === 'init') {
             document.body.style.background = data.color;
             infoEl.innerText = `あなたは Player ${data.num}`;
+          } else if (data.type === 'hit') {
+            // パックを打った瞬間に短く振動
+            if (navigator.vibrate) navigator.vibrate(30);
           }
         });
 
-        // タッチ操作の送信
         let lastX = null;
         let lastY = null;
 

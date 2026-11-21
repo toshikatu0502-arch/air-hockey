@@ -2,23 +2,38 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
-  <title>8人エアホッケー（ホスト盤面）</title>
+  <title>8人マルチパック・エアホッケー</title>
   <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
   <style>
     body { margin: 0; background: #111; color: #fff; font-family: sans-serif; overflow: hidden; display: flex; }
-    #sidebar { width: 260px; padding: 20px; background: #1e1e24; display: flex; flex-direction: column; align-items: center; z-index: 10; }
-    #qrcode { background: #fff; padding: 10px; border-radius: 8px; margin: 15px 0; }
+    #sidebar { width: 260px; padding: 20px; background: #1e1e24; display: flex; flex-direction: column; align-items: center; z-index: 10; box-sizing: border-box; }
+    #qrcode { background: #fff; padding: 10px; border-radius: 8px; margin: 10px 0; }
     canvas { flex: 1; background: #0a0a0f; display: block; }
-    .player-badge { width: 100%; padding: 8px; margin: 4px 0; border-radius: 4px; font-weight: bold; color: #000; }
+    .player-badge { width: 100%; padding: 8px; margin: 4px 0; border-radius: 4px; font-weight: bold; color: #000; box-sizing: border-box; }
+    .controls { width: 100%; background: #2a2a35; padding: 12px; border-radius: 8px; margin: 10px 0; text-align: center; box-sizing: border-box; }
+    .btn-group { display: flex; justify-content: center; align-items: center; gap: 15px; margin-top: 8px; }
+    button { background: #007AFF; color: #fff; border: none; border-radius: 6px; width: 36px; height: 36px; font-size: 20px; font-weight: bold; cursor: pointer; }
+    button:active { opacity: 0.7; }
+    #puck-count { font-size: 20px; font-weight: bold; min-width: 24px; }
   </style>
 </head>
 <body>
   <div id="sidebar">
-    <h3>スマホで参加</h3>
+    <h3 style="margin: 0 0 5px 0;">スマホで参加</h3>
     <div id="qrcode"></div>
-    <p id="status" style="font-size: 12px; color: #aaa;">ID発行中...</p>
-    <div id="player-list" style="width: 100%;"></div>
+    <p id="status" style="font-size: 12px; color: #aaa; margin: 5px 0;">ID発行中...</p>
+    
+    <div class="controls">
+      <div style="font-size: 13px; color: #ccc;">パックの数（マルチパック）</div>
+      <div class="btn-group">
+        <button onclick="changePuckCount(-1)">-</button>
+        <span id="puck-count">3</span>
+        <button onclick="changePuckCount(1)">+</button>
+      </div>
+    </div>
+
+    <div id="player-list" style="width: 100%; overflow-y: auto; flex: 1;"></div>
   </div>
   <canvas id="gameCanvas"></canvas>
 
@@ -26,7 +41,9 @@
     const canvas = document.getElementById('gameCanvas');
     const ctx = canvas.getContext('2d');
     const colors = ['#FF3B30', '#007AFF', '#34C759', '#FFCC00', '#AF52DE', '#FF9500', '#5AC8FA', '#FF2D55'];
-    const players = {}; // 接続中のプレイヤー情報
+    const players = {};
+    const pucks = [];
+    let targetPuckCount = 3;
 
     function resize() {
       canvas.width = window.innerWidth - 260;
@@ -35,52 +52,83 @@
     window.addEventListener('resize', resize);
     resize();
 
+    // パック生成関数
+    function createPuck() {
+      const angle = Math.random() * Math.PI * 2;
+      const speed = 5 + Math.random() * 3;
+      return {
+        x: canvas.width / 2 + (Math.random() - 0.5) * 100,
+        y: canvas.height / 2 + (Math.random() - 0.5) * 100,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+        radius: 16,
+        color: '#00ffcc'
+      };
+    }
+
+    function syncPuckCount() {
+      while (pucks.length < targetPuckCount) pucks.push(createPuck());
+      while (pucks.length > targetPuckCount) pucks.pop();
+      document.getElementById('puck-count').innerText = targetPuckCount;
+    }
+
+    function changePuckCount(delta) {
+      targetPuckCount = Math.max(1, Math.min(10, targetPuckCount + delta));
+      syncPuckCount();
+    }
+    syncPuckCount();
+
     // 1. PeerJSの初期化（ホスト）
     const peer = new Peer();
 
     peer.on('open', (id) => {
       document.getElementById('status').innerText = 'ルームID: ' + id;
-      // 同じ階層にある controller.html へのURLを生成
       const baseUrl = window.location.href.substring(0, window.location.href.lastIndexOf('/') + 1);
       const joinUrl = `${baseUrl}controller.html?host=${id}`;
       
       new QRCode(document.getElementById('qrcode'), {
         text: joinUrl,
-        width: 180,
-        height: 180
+        width: 160,
+        height: 160
       });
     });
 
-    // 2. スマホからの接続を受け付ける
+    // 2. スマホからの接続受付
     peer.on('connection', (conn) => {
       const playerIndex = Object.keys(players).length;
       if (playerIndex >= 8) {
-        conn.close(); // 8人まで
+        conn.close();
         return;
       }
 
       const color = colors[playerIndex];
       players[conn.peer] = {
         id: conn.peer,
+        conn: conn,
         num: playerIndex + 1,
         color: color,
         x: canvas.width / 2,
         y: canvas.height / 2,
-        radius: 28
+        vx: 0,
+        vy: 0,
+        radius: 30
       };
       updatePlayerList();
 
-      // 接続完了後、スマホ側に割り当てた色を伝える
       conn.on('open', () => {
         conn.send({ type: 'init', color: color, num: playerIndex + 1 });
       });
 
-      // スマホから送られてきた移動量(dx, dy)を反映
       conn.on('data', (data) => {
         if (data.type === 'move' && players[conn.peer]) {
           const p = players[conn.peer];
-          p.x = Math.max(p.radius, Math.min(canvas.width - p.radius, p.x + data.dx * 1.5));
-          p.y = Math.max(p.radius, Math.min(canvas.height - p.radius, p.y + data.dy * 1.5));
+          const moveX = data.dx * 1.6;
+          const moveY = data.dy * 1.6;
+          p.x = Math.max(p.radius, Math.min(canvas.width - p.radius, p.x + moveX));
+          p.y = Math.max(p.radius, Math.min(canvas.height - p.radius, p.y + moveY));
+          // 打ち返し用の瞬間速度を記録
+          p.vx = moveX;
+          p.vy = moveY;
         }
       });
 
@@ -102,10 +150,123 @@
       });
     }
 
-    // 3. 描画ループ（60fps）
+    // 3. 物理演算の更新
+    function updatePhysics() {
+      const playerList = Object.values(players);
+
+      for (let i = 0; i < pucks.length; i++) {
+        const puck = pucks[i];
+        puck.x += puck.vx;
+        puck.y += puck.vy;
+
+        // 摩擦（緩やかに減速）と最高・最低速度の制限
+        puck.vx *= 0.996;
+        puck.vy *= 0.996;
+        const currentSpeed = Math.hypot(puck.vx, puck.vy);
+        if (currentSpeed > 22) {
+          puck.vx = (puck.vx / currentSpeed) * 22;
+          puck.vy = (puck.vy / currentSpeed) * 22;
+        } else if (currentSpeed < 3.5 && currentSpeed > 0) {
+          puck.vx = (puck.vx / currentSpeed) * 3.5;
+          puck.vy = (puck.vy / currentSpeed) * 3.5;
+        }
+
+        // 壁との反射
+        if (puck.x - puck.radius < 0) { puck.x = puck.radius; puck.vx = Math.abs(puck.vx); }
+        if (puck.x + puck.radius > canvas.width) { puck.x = canvas.width - puck.radius; puck.vx = -Math.abs(puck.vx); }
+        if (puck.y - puck.radius < 0) { puck.y = puck.radius; puck.vy = Math.abs(puck.vy); }
+        if (puck.y + puck.radius > canvas.height) { puck.y = canvas.height - puck.radius; puck.vy = -Math.abs(puck.vy); }
+
+        // マレットとの衝突判定
+        playerList.forEach(p => {
+          const dx = puck.x - p.x;
+          const dy = puck.y - p.y;
+          const dist = Math.hypot(dx, dy);
+          const minDist = puck.radius + p.radius;
+
+          if (dist < minDist && dist > 0) {
+            const nx = dx / dist;
+            const ny = dy / dist;
+            // めり込み解消
+            puck.x = p.x + nx * minDist;
+            puck.y = p.y + ny * minDist;
+
+            // 反射＋マレットの勢いを加算
+            const hitSpeed = Math.hypot(p.vx, p.vy);
+            const bounceSpeed = Math.max(8, currentSpeed * 0.9 + hitSpeed * 0.7);
+            puck.vx = nx * bounceSpeed + p.vx * 0.3;
+            puck.vy = ny * bounceSpeed + p.vy * 0.3;
+
+            // スマホへ振動通知
+            if (p.conn && p.conn.open) {
+              p.conn.send({ type: 'hit' });
+            }
+          }
+        });
+
+        // パック同士の衝突判定
+        for (let j = i + 1; j < pucks.length; j++) {
+          const other = pucks[j];
+          const dx = other.x - puck.x;
+          const dy = other.y - puck.y;
+          const dist = Math.hypot(dx, dy);
+          const minDist = puck.radius + other.radius;
+
+          if (dist < minDist && dist > 0) {
+            const nx = dx / dist;
+            const ny = dy / dist;
+            const overlap = (minDist - dist) / 2;
+            puck.x -= nx * overlap;
+            puck.y -= ny * overlap;
+            other.x += nx * overlap;
+            other.y += ny * overlap;
+
+            // 速度の交換（弾性衝突）
+            const kx = puck.vx - other.vx;
+            const ky = puck.vy - other.vy;
+            const pVal = 2 * (nx * kx + ny * ky) / 2;
+            puck.vx -= pVal * nx;
+            puck.vy -= pVal * ny;
+            other.vx += pVal * nx;
+            other.vy += pVal * ny;
+          }
+        }
+      }
+
+      // マレットの瞬間速度をリセット（指を止めたら速度0にする）
+      playerList.forEach(p => {
+        p.vx *= 0.5;
+        p.vy *= 0.5;
+      });
+    }
+
+    // 4. 描画ループ
     function loop() {
-      ctx.fillStyle = 'rgba(10, 10, 15, 0.3)'; // 少し残像を残す
+      updatePhysics();
+
+      ctx.fillStyle = 'rgba(10, 10, 15, 0.35)';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      // 盤面の外枠ライン
+      ctx.strokeStyle = '#333';
+      ctx.lineWidth = 4;
+      ctx.strokeRect(2, 2, canvas.width - 4, canvas.height - 4);
+
+      // パックの描画
+      pucks.forEach(puck => {
+        ctx.beginPath();
+        ctx.arc(puck.x, puck.y, puck.radius, 0, Math.PI * 2);
+        ctx.fillStyle = puck.color;
+        ctx.shadowBlur = 18;
+        ctx.shadowColor = puck.color;
+        ctx.fill();
+        ctx.shadowBlur = 0;
+
+        ctx.beginPath();
+        ctx.arc(puck.x, puck.y, puck.radius * 0.5, 0, Math.PI * 2);
+        ctx.fillStyle = '#fff';
+        ctx.fill();
+      });
 
       // プレイヤー（マレット）の描画
       Object.values(players).forEach(p => {
